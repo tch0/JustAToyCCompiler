@@ -1,14 +1,35 @@
 # 一个能够自举的C编译器
 
-如题实现一个能够自举的玩具C编译器(缩水版的C，只支持其中一部分特性)。
+一个能够自举的玩具C编译器，只支持其中一部分核心特性。
 
 参考资料：
 - 直接学习：[Bilibili-700行手写编译器](https://www.bilibili.com/video/BV1Kf4y1V783)
 - 间接参考：[rswier/C4](https://github.com/rswier/c4)，一个500行的能够自举的简易C语言编译器。
 - 更多关于C4以及实现一个C编译器该有的细节：[知乎-RednaxelaFX关于C4的文章](https://www.zhihu.com/question/28249756/answer/84307453)
+- c4改进的x86 JIT编译器：[EarlGray/c4](https://github.com/EarlGray/c4)
 
 ## 特性
 
+编译器特性；
+- 前后端合一，无中间优化。
+- 目标代码基于自定义的虚拟机（VM），非常简单但也足够完整。
+- 单趟（One-Pass）解析过程：源代码经过Parse & CodeGen过程直接生成虚拟机指令，然后由虚拟机来执行。
+
+支持的C语言特性：TODO
+
+由于实现带来的限制：TODO
+
+
+## 构建与测试
+
+TODO
+
+```shell
+gcc jatcc.c -o jatcc
+./jatcc FullFeatureTest.c
+./jatcc jatcc.c FullFeatureTest.c
+./jatcc jatcc.c jatcc.c FullFeatureTest.c
+```
 
 ## 编译器
 
@@ -37,12 +58,6 @@
 
 ## VM设计
 
-编译器设计思路：
-- 前后端合一，无中间优化。
-- 目标代码基于自定义的虚拟机（VM），非常简单但也足够完整。
-- One-Pass 解析过程：源代码经过Parse & CodeGen过程直接生成虚拟机指令，然后由虚拟机来执行。
-- 由此某些特性无法实现：比如说在必须将局部变量声明在函数一开始的位置。
-
 ### 总览
 
 极简设计的虚拟机；
@@ -68,7 +83,8 @@
     - 32位内存地址，用int即可保存指针。
     - 变长指令，指令长度为4字节长的指令（只是为了方便，其实不需要这么长），加上每一个操作数4字节。
     - PC单位就是4字节，PC+1用来提取操作数或者取下一条指令。
-    - 其实也就是说无论是栈还是code段用一个int数组即可轻松实现。如何改成64位：最简单的方法就是将PC、寄存器、栈单位改成8个字节。
+    - 如果指令有操作数，那么实现指令时就需要将取出操作数并移到下一条指令开头，基本操作就是*pc++。
+    - 也就是说无论是栈还是code段用一个int数组即可轻松实现。如何改成64位：最简单的方法就是将PC、寄存器、栈单位改成8个字节，c4的实现中的`#define int long long`。
 
 
 ### 指令集细节
@@ -90,17 +106,17 @@ Save & Load：内存与寄存器之间的数据流通，IMM和LEA是**单操作�
 分支跳转类：**单操作数**。
 - JMP：无条件跳转，PC to XXX。
 - JZ：有条件跳转，寄存器为0时跳转。
-- JNZ：有条件挑战，寄存器不为0时跳转。
+- JNZ：有条件跳转，寄存器不为0时跳转。
 
 函数调用相关的跳转：
 - CALL：CALL addr，调用addr地址的函数。
-- NVAR：New stack frame for variables，给变量新建栈帧。操作数是变量个数，比如NVAR 4。应该位于一个函数开头，在栈上为函数参数新建存储空间。在这一步做现场保护。
-- DARG：Delete stack frame for arguments。一个操作数，如DARG 2，清除为参数分配的内存。
+- NVAR：New stack frame for variables，给变量新建栈帧。操作数是变量个数，比如NVAR 4。应该位于一个函数开头，在栈上为函数内的局部变量新建存储空间，在这一步做现场保护。
+- DARG：Delete stack frame for arguments。一个操作数，含义是变量个数，如DARG 2，清除为参数分配的内存。
 - RET：函数返回，负责恢复现场并切换到下一条指令。
 
 native-call：直接调用C库函数。
 - OPEN：打开文件。
-- CLOS：关闭文件
+- CLOS：关闭文件。
 - READ：从设备读数据。
 - WRIT：写数据到设备。
 - PRTF：写到标准输出（fd=1）。
@@ -132,7 +148,7 @@ native-call：直接调用C库函数。
 
 
 
-## VM实现
+### VM实现
 
 理解思路，不需要关注细节，细节请看源码（TODO）。
 
@@ -183,7 +199,7 @@ if (op == CALL) {*--sp = (int)(pc+1); pc = (int*)*pc;}
 if (op == NVAR) {*--sp = (int)bp; bp = sp; sp = sp - *pc++;}
 // delete stack frame for arguments
 if (op == DARG) sp = sp + *pc++;
-// return: reverse of NVAR, jump to next instruction
+// return: reverse of NVAR, and jump to next instruction
 if (op == RET) {sp = bp; bp = (int*)*sp++; pc = (int*)sp++;}
 ```
 
@@ -191,7 +207,9 @@ if (op == RET) {sp = bp; bp = (int*)*sp++; pc = (int*)sp++;}
 ```C++
 int add(int a, int b)
 {
-    return a + b;
+    int res;
+    res = a + b;
+    return res;
 }
 int main()
 {
@@ -260,7 +278,7 @@ native-call：为了完成自举所以需要，直接调用本地C语言库函�
 else if (i == OPEN) ax = open((char *)sp[1], *sp);
 else if (i == READ) ax = read(sp[2], (char *)sp[1], *sp);
 else if (i == CLOS) ax = close(*sp);
-else if (i == PRTF) { t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4],t[-5], t[-6]); }
+else if (i == PRTF) { t = sp + pc[1]; ax = printf((char *)t[-1], t[-2], t[-3], t[-4],t[-5], t[-6]); }
 else if (i == MALC) ax = (int)malloc(*sp);
 else if (i == FREE) free((void *)*sp);
 else if (i == MSET) ax = (int)memset((char *)sp[2], sp[1], *sp);
@@ -272,15 +290,19 @@ else if (i == WRIT) ax = write(sp[2], (char *)sp[1], *sp);
 
 ## 编译器实现
 
-## 问题
-
-- 局部变量必须要声明在函数开始。
+TODO
 
 ## TODO
 
 - parser & Code Generator
-- GC for malloc and free
+- GC for malloc and free ?
 - switch ?
 - break & continue ?
-- #include & typedef ?
+- goto & label ?
+- struct ?
+- macro & typedef ?
 - multi-file support ?
+- preprocessing directives ?
+- JIT compiling ?
+
+欢迎任何有意义的改进、扩展与建议。
