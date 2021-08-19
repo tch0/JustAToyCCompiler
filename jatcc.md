@@ -122,7 +122,7 @@ native-call：直接调用C库函数。
 - MALC：malloc。
 - FREE：free。
 - MSET：memset。
-- MCPY：memcpy。
+- MCMP：memcmp。
 - EXIT：exit，结束程序。
 
 
@@ -148,7 +148,7 @@ native-call：直接调用C库函数。
 
 ### VM实现
 
-理解思路，不需要关注细节，细节请看源码（TODO）。
+理解思路，不需要关注细节，细节请看源码。
 
 Save & Load：
 ```C++
@@ -189,7 +189,7 @@ else if (op == JZ)      pc = ax ? pc+1 : (int*)*pc; // jump if ax is zero.
 else if (op == JNZ)     pc = ax ? (int*)*pc ? pc+1; // jump if ax is not zero.
 ```
 
-函数调用：d
+函数调用：
 ```C++
 // call function: push pc+1 to stack, jump to function addr
 if (op == JSR) {*--sp = (int)(pc+1); pc = (int*)*pc;}
@@ -333,15 +333,14 @@ else if (op == WRIT) ax = write(sp[2], (char *)sp[1], *sp);
 ### 符号表
 
 符号表里面需要放什么东西：
-- token：已经定义的token，比如支持的关键字（也可以不放在符号表，放在符号表更简单）、已声明的标识符。
-- hash：给name做一次哈希运算，只是方便查找，不需要每次都拿名称做比较。没有实现哈希表，不做为哈希表的key，不过可以考虑解决哈希冲突把实现一个哈希表，这样查找会更快。
-- name：名称。
-- class：符号的类型，数值、函数、系统调用（native-call）、变量（局部变量、全局变量）、类型（int、char）等，用枚举值表示。
-- Type：符号的类型（int、char、指针）
-- Value：具体的字面值、变量地址、data区地址。
-- GClass：用于全局变量，实现局部变量对同名全局变量的覆盖。但不支持局部的嵌套的作用域，就是说只支持两层作用域。
-- GType：同上。
-- GValue：同上。
+- Token: 标记，值应该是Token_type类型的。
+- Hash: 根据名称计算出的一个哈希值，加速查找，不需要每次都去遍历名字比较。
+- Name: 名称，计算出哈希值之后就不需要用它了，指向源文件某位置的char*指针。
+- Class: 标识符的类型，Id类型才需要，值为Identifier_type中枚举。
+- Type: 标识符的变量类型或者函数返回值类型，值为Var_type枚举中普通类型与PTR组合得到的值。
+- Value: 标识符的值：如果标识符是函数，则是函数地址，如果是变量或者字符串常量就是地址，如果是字面量则是具体的值。
+- GClass/GType/GVlaue: 同Class/Type/Value，处理全局作用域对函数作用域的覆盖。
+- IdSize: struct长度。
 
 ### 递归下降
 
