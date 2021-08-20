@@ -1,3 +1,24 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [编译器](#%E7%BC%96%E8%AF%91%E5%99%A8)
+- [编译器设计](#%E7%BC%96%E8%AF%91%E5%99%A8%E8%AE%BE%E8%AE%A1)
+- [VM设计](#vm%E8%AE%BE%E8%AE%A1)
+  - [总览](#%E6%80%BB%E8%A7%88)
+  - [指令集细节](#%E6%8C%87%E4%BB%A4%E9%9B%86%E7%BB%86%E8%8A%82)
+  - [VM实现](#vm%E5%AE%9E%E7%8E%B0)
+- [编译器实现](#%E7%BC%96%E8%AF%91%E5%99%A8%E5%AE%9E%E7%8E%B0)
+  - [标准流程](#%E6%A0%87%E5%87%86%E6%B5%81%E7%A8%8B)
+  - [词法分析](#%E8%AF%8D%E6%B3%95%E5%88%86%E6%9E%90)
+  - [语法分析](#%E8%AF%AD%E6%B3%95%E5%88%86%E6%9E%90)
+  - [语义分析与符号表](#%E8%AF%AD%E4%B9%89%E5%88%86%E6%9E%90%E4%B8%8E%E7%AC%A6%E5%8F%B7%E8%A1%A8)
+  - [递归下降](#%E9%80%92%E5%BD%92%E4%B8%8B%E9%99%8D)
+  - [运算符优先级分析](#%E8%BF%90%E7%AE%97%E7%AC%A6%E4%BC%98%E5%85%88%E7%BA%A7%E5%88%86%E6%9E%90)
+  - [代码生成](#%E4%BB%A3%E7%A0%81%E7%94%9F%E6%88%90)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 ## 编译器
 
 先看一下Wiki：
