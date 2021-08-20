@@ -54,9 +54,9 @@ gcc jatcc.c -o jatcc
 扩展版本：TODO
 ```shell
 gcc jatccex.c -o jatccex
-./ jatccex testex.c
-./ jatccex jatccex.c testex.c
-./ jatccex jatcc.c test.c
+./jatccex testex.c
+./jatccex jatccex.c testex.c
+./jatccex jatcc.c test.c
 ```
 
 ## 实现细节
