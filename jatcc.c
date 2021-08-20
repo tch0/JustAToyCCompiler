@@ -61,6 +61,7 @@ enum Token_type
     Sizeof,         // sizeof
     While,          // while
     // operators in precedence order
+    Comma,          // ,
     Assign,         // =
     Cond,           // ?
     Lor,            // ||
@@ -284,6 +285,7 @@ void next()
             }
         }
         // 操作符
+        else if (token == ',') { token = Comma; return; }
         else if (token == '=') { if (*src == '=') { src++; token = Eq; } else token = Assign; return; } // = ==
         else if (token == '+') { if (*src == '+') { src++; token = Inc; } else token = Add; return; } // + ++
         else if (token == '-') { if (*src == '-') { src++; token = Dec; } else token = Sub; return; } // - --
@@ -297,7 +299,7 @@ void next()
         else if (token == '*') { token = Mul; return; } // *
         else if (token == '?') { token = Cond; return; } // ?
         else if (token == '[') { token = Brak; return; } // [
-        else if (token == '~' || token == ';' || token == '{' || token == '}' || token == '(' || token == ')' || token == ']' || token == ',' || token == ':') return; // tokens are their ASCII
+        else if (token == '~' || token == ';' || token == '{' || token == '}' || token == '(' || token == ')' || token == ']' || token == ':') return; // tokens are their ASCII
     }
 }
 
@@ -324,6 +326,7 @@ void match(int tk)
        "Return"
        "Sizeof"
        "While "
+       "Comma "
        "Assign"
        "Cond  "
        "Lor   "
@@ -349,7 +352,7 @@ void match(int tk)
        "Brak  ";
         if (tk >= Num && tk <= Brak)
         {
-            printf("%d: expected token : %s\n", line, tokens[6*(tk - Num)]);
+            printf("%d: expected token : %.6s\n", line, &tokens[6*(tk - Num)]);
         }
         else
         {
@@ -446,7 +449,7 @@ void expression(int level)
                 tmp++;
                 if (token != ')')
                 {
-                    match(',');
+                    match(Comma);
                     if (token == ')')
                     {
                         printf("%d: expected expression after ','\n", line);
@@ -536,7 +539,7 @@ void expression(int level)
         // 普通的括号运算符，而不是强制类型转换
         else
         {
-            expression(Assign);
+            expression(Comma);
             match(')');
         }
     }
@@ -667,13 +670,24 @@ void expression(int level)
     }
 
     // 处理二元运算符，不断向右扫描，直到遇到优先级小于当前优先级的运算符，参数level指定了当前的优先级
+    // 注意结合性的影响，左结合则向右计算优先级更高的运算符，右结合则向右计算优先级相等或者更高的运算符
+    // 因为要区分不同运算符，必须使用不同枚举值，用来代指更高优先级的运算符应该选用高一级的同类优先级运算符中枚举值最小的那一个
     while (token >= level)
     {
         tmp = expr_type;
+
+        // 逗号表达式，左结合，优先级最低
+        if (token == Comma)
+        {
+            match(Comma);
+            // 什么都不做，后面的操作将覆盖ax，不需要特地清理，如果清理了前面的代码，条件跳转的地址(if ?:)可能会出现问题
+            expression(Assign);
+        }
         // var = expr;
         // 解析=前，已经为var生成了汇编代码，变量地址会保存在ax中
-        if (token == Assign)
+        else if (token == Assign)
         {
+            // 右结合，如果有会先计算右边的赋值表达式
             match(Assign);
             // LC/LI表明上一步是加载值到ax（地址存在ax中），也就是=左边是一个左值
             if (*code == LC || *code == LI)
@@ -691,13 +705,13 @@ void expression(int level)
             // 最后来将表达式的值存到栈顶地址的位置，实现赋值操作
             *++code = (expr_type == CHAR) ? SC : SI;
         }
-        // expr ? a : b 三目运算符
+        // expr ? a : b 三目运算符，注意中间的a相当于加了括号，需要使用最低优先级，左边的expr和b则就是?:的优先级
         else if (token == Cond)
         {
             match(Cond);
             *++code = JZ;
             addr = ++code;
-            expression(Assign);
+            expression(Comma);
             if (token == ':') {
                 match(':');
             }
@@ -939,7 +953,7 @@ void expression(int level)
         {
             match(Brak);
             *++code = PUSH;
-            expression(Assign);
+            expression(Comma);
             match(']');
             if (tmp > PTR) // 并非char*的指针
             {
@@ -1002,7 +1016,7 @@ void statement()
     {
         match(If);
         match('(');
-        expression(Assign);
+        expression(Comma);
         match(')');
 
         *++code = JZ;
@@ -1026,7 +1040,7 @@ void statement()
         a = code + 1;
 
         match('(');
-        expression(Assign);
+        expression(Comma);
         match(')');
 
         *++code = JZ;
@@ -1054,7 +1068,7 @@ void statement()
         match(Return);
         if (token != ';')
         {
-            expression(Assign);
+            expression(Comma);
         }
         match(';');
         *++code = LEV; // leave subroutine
@@ -1067,7 +1081,7 @@ void statement()
     // expression, ";"
     else
     {
-        expression(Assign);
+        expression(Comma);
         match(';');
     }
 }
@@ -1127,7 +1141,7 @@ void function_parameter()
 
         if (token != ')')
         {
-            match(',');
+            match(Comma);
             if (token == ')')
             {
                 printf("%d: expected identifier after ','\n", line);
@@ -1218,9 +1232,14 @@ void function_body()
             current_id[Type] = type;
             current_id[Value] = ++local_pos + index_of_bp; // 用index_of_bp减这个值得到相对bp偏移，为了统一局部变量和参数的处理
 
-            if (token == ',')
+            if (token != ';')
             {
-                match(',');
+                match(Comma);
+                if (token == ';')
+                {
+                    printf("%d: expected identifier after ','\n", line);
+                    exit(-1);
+                }
             }
         }
         match(';');
@@ -1302,7 +1321,7 @@ void enum_body()
 
         if (token != '}')
         {
-            match(',');
+            match(Comma);
         }
     }
 }
@@ -1349,7 +1368,7 @@ void global_declaration()
         basetype = CHAR;
     }
 
-    // 变量或者函数定义，知道变量结束;，函数结束}
+    // 变量或者函数定义，直到变量结束;，函数结束}
     while (token != ';' && token != '}')
     {
         type = basetype;
@@ -1387,11 +1406,16 @@ void global_declaration()
             current_id[Class] = Glo;
             current_id[Value] = (int)data;
             data = data + sizeof(int); // 每种变量
-        }
-        // 一行定义多个变量
-        if (token == ',')
-        {
-            match(',');
+            // 一行定义多个变量
+            if (token != ';')
+            {
+                match(Comma);
+                if (token == ';')
+                {
+                    printf("%d: expected identifier after ','\n", line);
+                    exit(-1);
+                }
+            }
         }
     }
     next(); // ; }
@@ -1438,8 +1462,21 @@ int run_vm()
     int op, *tmp;
     while (1)
     {
+        
         op = *pc++;
         cycle++;
+        if (debug == 1)
+        {
+            printf("%d> %.4s", cycle, &"LEA ,IMM ,JMP ,JSR ,JZ  ,JNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PUSH,"
+                "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
+                "OPEN,READ,CLOS,WRIT,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[(op - LEA) * 5]);
+            if (op >= JMP && op <= JNZ)
+                printf("0x%.10X\n", *pc);
+            else if (op <= ADJ)
+                printf("%d\n", *pc);
+            else
+                printf("\n");
+        }
 
         // load & store
         if (op == IMM) { ax = *pc++; }                      // load immediate to ax

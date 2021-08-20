@@ -60,7 +60,7 @@ void test_enum()
     test(Fourth1, 3);
 }
 
-// operator: = ?: || && | ^ & ! == != < > <= >= << >> + - * /  % ++ -- [] ()
+// operator: , = ?: || && | ^ & ! == != < > <= >= << >> + - * /  % ++ -- [] ()
 void test_operator()
 {
     int a, b, c, d;
@@ -68,6 +68,18 @@ void test_operator()
 
     test_class = (char*)"operator";
     local_count = 1;
+
+    // ,
+    test_class = (char*)"operator ,";
+    local_count = 1;
+    a = b = 0;
+    c = (a = 10, b = 100);
+    test(a, 10);
+    test(b, 100);
+    test(c, 100);
+    a, b = 50;
+    test(a, 10);
+    test(b, 50);
 
     // =
     test_class = (char*)"operator =";
@@ -274,6 +286,10 @@ void test_expression()
 
     test_class = (char*)"expression";
     local_count = 1;
+
+    // , and =
+    a = 0, 1;
+    test(a, 0);
 
     // = and ? :
     a = 0;
