@@ -26,12 +26,15 @@
 - 不检查函数调用参数个数与类型是否匹配。
 - 类型系统实现得非常简单，支持数组下标操作但不支持数组定义。
 
-`jatccex.c`添加的扩展：TODO
+`jatccex.c`添加的扩展：
+- 控制流：`for` `do while`
+
+正在支持：
 - 浮点类型支持
 - 函数前向声明
 - 命名`enum`支持，简单等同于`int`
 - `union` `struct`类型支持，相关操作符`. ->`支持
-- `switch` `break` `continue` `for`
+- `switch` `break` `continue` `goto`
 - 使用了支持的特性替换部分实现细节
 - 同样自举
 
@@ -51,7 +54,7 @@ gcc jatcc.c -o jatcc
 ./jatcc jatcc.c jatcc.c test.c
 ```
 
-扩展版本：TODO
+扩展版本：
 ```shell
 gcc jatccex.c -o jatccex
 ./jatccex testex.c
