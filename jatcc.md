@@ -442,39 +442,49 @@ ENT [count of local variables]
 LEV
 ```
 if-else结构：
-```
+```C++
 if (condition)
 {
-    true statement
+    true_statements;
+}
+
+if (condition)
+{
+    true_statements;
 }
 else
 {
-    false statement
+    false_statements;
 }
 ```
 生成代码：
 ```
 [condition]
-JZ [false point]
-[true statement]    <-----[true point]
-JMP [end point]
-[false statement]   <-----[false point]
-...                 <-----[end point]
+JZ [end]
+[true_statements]
+...                 <-----[end]
+
+[condition]
+JZ [a]
+[true_statements]
+JMP [end]
+[false_statements]   <-----[a]
+...                  <-----[end]
 ```
 while结构：
-```
+```C++
 while (condition)
 {
-    while statement
+    while_statements;
 }
 ```
 生成代码：
 ```
-[condition]         <-----[start point]
-JZ [end point]
-[while statement]
-JMP [start point]
-...                 <-----[end point]
+[condition]         <-----[a]
+JZ [end]
+[while_statements]
+JMP [a]
+...                 <-----[end]
 ```
 return语句：
 ```

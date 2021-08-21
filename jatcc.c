@@ -990,26 +990,48 @@ if_statement = if, "(", expression, ")", statement, [else, statement];
 while_statement = while, "(", expression, ")", statement;
 
 代码生成：
-If语句                          VM指令
-  if (<cond>)                   <cond>
-                                JZ a
-    <true_statement>   ===>     <true_statement>
-  else:                         JMP b
-a:                           a:
-    <false_statement>           <false_statement>
-b:                           b:
+if-else语句：
+if (condition)
+{
+    true_statements;
+}
 
-while
-a:                     a:
-   while (<cond>)        <cond>
-                         JZ b
-    <statement>          <statement>
-                         JMP a
-b:                     b:
+if (condition)
+{
+    true_statements;
+}
+else
+{
+    false_statements;
+}
+
+[condition]
+JZ [end]
+[true_statements]
+...                 <-----[end]
+
+[condition]
+JZ [a]
+[true_statements]
+JMP [end]
+[false_statements]   <-----[a]
+...                  <-----[end]
+
+while语句：
+while (condition)
+{
+    while_statements;
+}
+
+[condition]         <-----[a]
+JZ [end]
+[while_statements]
+JMP [a]
+...                 <-----[end]
 */
 void statement()
 {
-    int *a, *b; // 记录保存a和b在code段中的地址，后续确定后再回来填充
+    int *a, *end; // 记录保存a和b在code段中的地址，后续确定后再回来填充
 
     // if, "(", expression, ")", statement, [else, statement]
     if (token == If)
@@ -1020,7 +1042,7 @@ void statement()
         match(')');
 
         *++code = JZ;
-        a = b = ++code;
+        a = end = ++code;
 
         statement();
         if (token == Else)
@@ -1028,10 +1050,10 @@ void statement()
             match(Else);
             *a = (int)(code + 3);
             *++code = JMP;
-            b = ++code;
+            end = ++code;
             statement();
         }
-        *b = (int)(code + 1);
+        *end = (int)(code + 1);
     }
     // while, "(", expression, ")", statement
     else if (token == While)
@@ -1044,13 +1066,13 @@ void statement()
         match(')');
 
         *++code = JZ;
-        b = ++code;
+        end = ++code;
 
         statement();
 
         *++code = JMP;
         *++code = (int)a;
-        *b = (int)(code + 1);
+        *end = (int)(code + 1);
     }
     // "{", {statement}, "}"
     else if (token == '{')
@@ -1183,7 +1205,7 @@ LEV
 调用方：
 参数按照调用顺序依次压栈
 JSR addr_of_func
-ADJ -count_of_params
+ADJ count_of_params
 ...
 
 函数参数相对于新的bp的偏移: ..., +4, +3, +2
