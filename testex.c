@@ -174,6 +174,37 @@ void test_continue()
     test(result, 550);
 }
 
+void test_goto()
+{
+    int i, result;
+    i = result = 0;
+
+    test_class = (char*)"conditionals goto & label";
+    local_count = 1;
+
+    // simulate while loop
+start:
+    if (i > 100)
+        goto end;
+    result = result + i;
+    i++;
+    goto start;
+end:
+    test(result, 5050);
+
+    // simulate break
+    i = result = 0;
+    while (i < 1000)
+    {
+        if (i > 100)
+            goto endloop;
+        result = result + i;
+        i++;
+    }
+endloop:
+    test(result, 5050);
+}
+
 int main()
 {
     total_count = 0;
@@ -183,6 +214,7 @@ int main()
     test_do_while();
     test_break();
     test_continue();
+    test_goto();
 
     printf("total: %d, passed: %d, failed: %d\n", total_count, total_count - failed_count, failed_count);
     return 0;

@@ -27,15 +27,15 @@
 - 类型系统实现得非常简单，支持数组下标操作但不支持数组定义。
 
 `jatccex.c`添加的扩展：
-- 控制流：`for` `do while`
+- 控制流：`for` `do while` `break` `continue` `goto`
 
 正在支持：
+- `switch`
 - 浮点类型支持
 - 函数前向声明
 - 命名`enum`支持，简单等同于`int`
 - `union` `struct`类型支持，相关操作符`. ->`支持
-- `switch` `break` `continue` `goto`
-- 使用了支持的特性替换部分实现细节
+- 使用支持了的特性替换部分实现细节
 - 同样自举
 
 ## 构建与测试
@@ -81,8 +81,7 @@ gcc jatccex.c -o jatccex
 
 ## TODO
 
-- switch & break & continue & for ?
-- struct & union & enum  ?
+- struct & union & enum ?
 - typedef ?
 - x86 JIT compiling ?
 

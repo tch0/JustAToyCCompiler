@@ -23,6 +23,10 @@ int token;      // 当前token
 int token_val;  // 当前token是常量或字符串字面值时用来记录值
 char *src;      // 源码
 int line;       // 行号
+int last_token;         // 支持记录回溯token流的功能
+int last_token_val;     // 支持记录回溯token流的功能
+char* last_src;         // 支持记录回溯token流的功能
+int last_line;          // 支持记录回溯token流的功能
 
 // parser
 int *symbols;   // 符号表，动态数组模拟结构体
@@ -34,6 +38,7 @@ int index_of_bp;// 函数调用时第一个参数相对bp的位置，函数的�
 int *break_list;    // break语句跳转地址的列表
 int *continue_list; // continue语句跳转地址列表
 int *cur_loop;      // 保存当前正在解析的循环的地址，用来唯一标识一个循环
+int *label_list;    // goto语句跳转地址列表
 
 // debug
 int debug;      // 调试模式
@@ -62,6 +67,7 @@ enum Token_type
     Else,           // else
     Enum,           // enum
     For,            // For
+    Goto,           // goto
     If,             // if
     Int,            // int
     Return,         // return
@@ -88,14 +94,15 @@ enum Token_type
 // 标识符的类型，用在符号表中的Class域
 enum Identifier_type
 {
-    EnumVal,    // enum value as constant
-    Fun,        // function
-    Sys,        // system call (native-call)
-    Glo,        // global variables
-    Loc,        // local variables
-    EnumType,   // user defined enum type
-    UnionType,  // user defined union type
-    StructType  // user defined struct type
+    EnumVal = 200,  // enum value as constant
+    Fun,            // function
+    Sys,            // system call (native-call)
+    Glo,            // global variables
+    Loc,            // local variables
+    EnumType,       // user defined enum type
+    UnionType,      // user defined union type
+    StructType,     // user defined struct type
+    Label           // label of goto
 };
 
 /*
@@ -115,6 +122,9 @@ enum Symbol_domain { Token = 0, Hash, Name, Class, Type, Value, GClass, GType, G
 
 // break和continue列表的域，同样模拟结构体
 enum Break_continue_list_domain { Loop = 0, BCAddress, BCListSize };
+
+// goto跳转列表的域，第一个是标号的哈希，第二个是地址
+enum Goto_list_domain { LabelHash = 0, JmpCodeAddress, GotoListSize };
 
 // 指令操作码，最多一个操作数
 enum Instruction
@@ -317,6 +327,26 @@ void next()
     }
 }
 
+
+/*
+记录与回溯token流状态，目前只用于标号的解析，只应该用于测试能否解析，不应该在中间生成任何代码。
+*/
+void record()
+{
+    last_src = src;
+    last_token = token;
+    last_token_val = token_val;
+    last_line = line;
+}
+
+void backtrack()
+{
+    src = last_src;
+    token = last_token;
+    token_val = last_token_val;
+    line = last_line;
+}
+
 /*
 检查下一个token是否是某种特定类型，不匹配报错退出。
 */
@@ -339,6 +369,7 @@ void match(int tk)
             "Else    "
             "Enum    "
             "For     "
+            "Goto    "
             "If      "
             "Int     "
             "Return  "
@@ -1008,6 +1039,8 @@ statement = if_statement
         | "{", {statement}, "}"
         | return, [expression], ";"
         | [expression], ";";
+        | id, ":", statement;
+        | goto, id, ";";
 if_statement = if, "(", expression, ")", statement, [else, statement];
 while_statement = while, "(", expression, ")", statement;
 for_statement = for, "(", [expression], ";", [expression], ";", [expression], ")", statement;
@@ -1089,6 +1122,7 @@ void statement()
     int *a, *b, *c, *end; // 记录保存跳转地址的code段地址，后续确定后填充
     int *list_pos;
     int *tmp_loop;  // 考虑循环嵌套，暂存当前循环，以便结束内层循环后恢复cur_loop，为了实现break和continue
+    int *id;
 
     a = b = c = end = 0;
     tmp_loop = 0;
@@ -1325,9 +1359,69 @@ void statement()
     {
         match(';');
     }
-    // expression, ";"
+    // goto, id, ";";
+    else if (token == Goto)
+    {
+        match(Goto);
+        match(Id);
+        
+        *++code = JMP;
+        // 添加当前需要填充的地址到label列表末尾
+        for (list_pos = label_list; *list_pos; list_pos = list_pos + GotoListSize) ;
+        list_pos[LabelHash] = current_id[Hash];
+        list_pos[JmpCodeAddress] = (int)++code;
+
+        match(';');
+    }
+    // expression, ";" | id, ":", statement
     else
     {
+        // 记录状态
+        record();
+
+        // 尝试解析为标号
+        if (token == Id)
+        {
+            match(Id);
+            id = current_id;
+            // 是标号
+            if (token == ':')
+            {
+                match(':');
+
+                // 标准C语言标号和变量、函数名是互不冲突的，但这里需要位置来保存，
+                // 出于实现方便和代码清晰考虑，直接限制标号不能和类型、函数、变量、系统调用、枚举值同名。
+                if (id[Class] >= EnumVal && id[Class] < Label)
+                {
+                    printf("%d: label can not have a same name with types, global vars, local vars, functions, system calls, and enum values\n", line);
+                    exit(-1);
+                }
+                else if (id[Class] == Label)
+                {
+                    printf("%d: labels can not have same name\n", line);
+                    exit(-1);
+                }
+
+                // 定义一个新的标号
+                id[Class] = Label;
+                id[Value] = (int)(code + 1);
+
+                // 标号后必须有语句，位于块末尾的必须加一个空语句;
+                if (token == '}')
+                {
+                    printf("%d: there must a statement after a label, please add a ';'\n", line);
+                    exit(-1);
+                }
+                statement();
+                cur_loop = tmp_loop;
+                return;
+            }
+            // 不是标号，回溯状态到匹配标识符前
+            else
+            {
+                backtrack();
+            }
+        }
         expression(Comma);
         match(';');
     }
@@ -1471,8 +1565,8 @@ void function_body()
             }
             match(Id);
 
-            // 如果有的话保存全局变量
-            if (current_id[Class] == Glo)
+            // 局部变量允许和全局变量、函数、枚举值同名，应该覆盖其定义
+            if (current_id[Class] >= EnumVal && current_id[Class] <= Glo)
             {
                 current_id[GClass] = current_id[Class];
                 current_id[GType] = current_id[Type];
@@ -1515,6 +1609,9 @@ func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
 */
 void function_declaration()
 {
+    int* list_pos;
+    int find_label;
+
     cur_loop = 0;
 
     match('(');
@@ -1524,11 +1621,31 @@ void function_declaration()
     function_body();
     //match('}'); // 不消耗}，留到global_declaration中用于标识函数解析过程的结束
 
+    // 填充goto的标号地址
+    for (list_pos = label_list; *list_pos; list_pos = list_pos + GotoListSize)
+    {
+        find_label = 0;
+        for (current_id = symbols; current_id[Token]; current_id = current_id + IdSize)
+        {
+            if (current_id[Token] == Id && current_id[Class] == Label && current_id[Hash] == list_pos[LabelHash] && current_id[Value])
+            {
+                *(int*)list_pos[JmpCodeAddress] = current_id[Value];
+                find_label = 1;
+            }
+        }
+        if (!find_label)
+        {
+            printf("%d: invalid label for goto in function, hash: %d\n", line, list_pos[LabelHash]);
+            exit(-1);
+        }
+        list_pos[LabelHash] = list_pos[JmpCodeAddress] = 0;
+    }
+
     // 遍历符号表，恢复全局变量定义，如果没有同名全局变量，则删除后符号表中还有该项，但是Class/Type/Value都会被置空
     current_id = symbols;
     while (current_id[Token])
     {
-        if (current_id[Class] == Loc)
+        if (current_id[Class] == Loc || current_id[Class] == Label)  // 同时清空标号定义
         {
             current_id[Class] = current_id[GClass];
             current_id[Type] = current_id[GType];
@@ -1587,7 +1704,7 @@ var_decl = type {"*"}, id, {",", id}, ";";
 */
 void global_declaration()
 {
-    int type;   // 临时变量，表示变量的数据类型
+    int type;   // 变量的数据类型
 
     basetype = INT;
 
@@ -1696,6 +1813,8 @@ statement = if_statement
         | "{", {statement}, "}"
         | return, [expression], ";"
         | [expression], ";";
+        | id, ":", statement;
+        | goto, id, ";";
 if_statement = if, "(", expression, ")", statement, [else, statement];
 while_statement = while, "(", expression, ")", statement;
 for_statement = for, "(", [expression], ";", [expression], ";", [expression], ")", statement;
@@ -1846,11 +1965,17 @@ int main(int argc, char** argv)
         printf("Could not malloc(%d) for continue list of parser\n", 8 * 1024);
         exit(-1);
     }
+    if (!(label_list = (int*)malloc(8 * 1024))) // 8KB
+    {
+        printf("Could not malloc(%d) for label list for goto of parser\n", 8 * 1024);
+        exit(-1);
+    }
     memset(symbols, 0, poolsize);
     memset(break_list, 0, 8 * 1024);
     memset(continue_list, 0, 8 * 1024);
+    memset(label_list, 0, 8 * 1024);
 
-    src = (char*)"break char continue do else enum for if int return sizeof while "
+    src = (char*)"break char continue do else enum for goto if int return sizeof while "
         "open read close write printf malloc free memset memcmp exit void main";
 
     // 将关键字提前添加到符号表，在词法分析时关键字走标识符的识别流程，由于已经在符号表中，所以直接返回符号表的结果
