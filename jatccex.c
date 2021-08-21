@@ -31,6 +31,9 @@ int *current_id;// 当前正在操作的符号表记录
 int basetype;   // 变量、函数和类型定义的基本类型，是指针类型时使用
 int expr_type;  // 表达式类型
 int index_of_bp;// 函数调用时第一个参数相对bp的位置，函数的参数数量+1
+int *break_list;    // break语句跳转地址的列表
+int *continue_list; // continue语句跳转地址列表
+int *cur_loop;      // 保存当前正在解析的循环的地址，用来唯一标识一个循环
 
 // debug
 int debug;      // 调试模式
@@ -52,7 +55,9 @@ enum Token_type
     Num = 128,      // number
     Id,             // identifier
     // keywords in lexicographic order
+    Break,          // break
     Char,           // char
+    Continue,       // Continue
     Do,             // do
     Else,           // else
     Enum,           // enum
@@ -106,6 +111,10 @@ GClass/GType/GVlaue: 同Class/Type/Value，处理全局作用域对函数作用�
 IdSize: struct长度。
 */
 enum Symbol_domain { Token = 0, Hash, Name, Class, Type, Value, GClass, GType, GValue, IdSize };
+
+
+// break和continue列表的域，同样模拟结构体
+enum Break_continue_list_domain { Loop = 0, BCAddress, BCListSize };
 
 // 指令操作码，最多一个操作数
 enum Instruction
@@ -321,45 +330,47 @@ void match(int tk)
     else
     {
         tokens =
-            "Num   "
-            "Id    "
-            "Char  "
-            "Do    "
-            "Else  "
-            "Enum  "
-            "For   "
-            "If    "
-            "Int   "
-            "Return"
-            "Sizeof"
-            "While "
-            "Comma "
-            "Assign"
-            "Cond  "
-            "Lor   "
-            "Land  "
-            "Or    "
-            "Xor   "
-            "And   "
-            "Eq    "
-            "Ne    "
-            "Lt    "
-            "Gt    "
-            "Le    "
-            "Ge    "
-            "Shl   "
-            "Shr   "
-            "Add   "
-            "Sub   "
-            "Mul   "
-            "Div   "
-            "Mod   "
-            "Inc   "
-            "Dec   "
-            "Brak  ";
+            "Num     "
+            "Id      "
+            "Break   "
+            "Char    "
+            "Continue"
+            "Do      "
+            "Else    "
+            "Enum    "
+            "For     "
+            "If      "
+            "Int     "
+            "Return  "
+            "Sizeof  "
+            "While   "
+            "Comma   "
+            "Assign  "
+            "Cond    "
+            "Lor     "
+            "Land    "
+            "Or      "
+            "Xor     "
+            "And     "
+            "Eq      "
+            "Ne      "
+            "Lt      "
+            "Gt      "
+            "Le      "
+            "Ge      "
+            "Shl     "
+            "Shr     "
+            "Add     "
+            "Sub     "
+            "Mul     "
+            "Div     "
+            "Mod     "
+            "Inc     "
+            "Dec     "
+            "Brak    ";
         if (tk >= Num && tk <= Brak)
         {
-            printf("%d: expected token : %.6s\n", line, &tokens[6 * (tk - Num)]);
+            printf("%d: expected token : %.8s\n", line, &tokens[8 * (tk - Num)]);
         }
         else
         {
@@ -992,6 +1003,8 @@ statement = if_statement
         | while_statement
         | for_statement
         | do_while_statement
+        | break_statement
+        | continue_statement
         | "{", {statement}, "}"
         | return, [expression], ";"
         | [expression], ";";
@@ -999,6 +1012,8 @@ if_statement = if, "(", expression, ")", statement, [else, statement];
 while_statement = while, "(", expression, ")", statement;
 for_statement = for, "(", [expression], ";", [expression], ";", [expression], ")", statement;
 do_while_statement = do, statement, while, "(", [expression], ")", ";";
+break_statement = break, ";";
+continue_statement = continue, ";";
 
 代码生成：
 =======================if-else语句=========================
@@ -1028,7 +1043,7 @@ JMP [end]
 [false_statements]   <-----[a]
 ...                  <-----[end]
 
-=======================while语句============================
+=======================while 语句============================
 while (condition)
 {
     while_statements;
@@ -1060,12 +1075,27 @@ JMP [b]
 [do_while_statements]   <------ [a]
 [condition]
 JNZ [a]
-...
+...                     <------ [end]
+
+=========================break 语句=========================
+JMP [end]
+
+=========================cotinue语句========================
+JMP [entry]
 
 */
 void statement()
 {
     int *a, *b, *c, *end; // 记录保存跳转地址的code段地址，后续确定后填充
+    int *list_pos;
+    int *tmp_loop;  // 考虑循环嵌套，暂存当前循环，以便结束内层循环后恢复cur_loop，为了实现break和continue
+
+    a = b = c = end = 0;
+    tmp_loop = 0;
+    list_pos = 0;
+
+    // 暂存当前循环，进入内层循环时会直接覆盖cur_loop
+    tmp_loop = cur_loop;
 
     // if, "(", expression, ")", statement, [else, statement]
     if (token == If)
@@ -1094,6 +1124,7 @@ void statement()
     {
         match(While);
         a = code + 1;
+        cur_loop = a;   // 保存当前循环，for break & continue
 
         match('(');
         expression(Comma);
@@ -1107,6 +1138,26 @@ void statement()
         *++code = JMP;
         *++code = (int)a;
         *end = (int)(code + 1);
+
+        // 处理break和continue列表中的跳转地址
+        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCListSize)
+        {
+            if (list_pos[Loop] == (int)cur_loop)
+            {
+                *(int*)list_pos[BCAddress] = (int)(code + 1);
+                list_pos[Loop] = 0;
+                list_pos[BCAddress] = 0;
+            }
+        }
+        for (list_pos = continue_list; *list_pos; list_pos++)
+        {
+            if (list_pos[Loop] == (int)cur_loop)
+            {
+                *(int*)list_pos[BCAddress] = (int)a;
+                list_pos[Loop] = 0;
+                list_pos[BCAddress] = 0;
+            }
+        }
     }
     // for, "(", [expression], ";", [expression], ";", [expression], ")", statement
     else if (token == For)
@@ -1121,6 +1172,7 @@ void statement()
         match(';');
 
         a = code + 1;
+        cur_loop = a;   // 保存当前循环，for break & continue
         // 条件表达式为空
         if (token == ';')
         {
@@ -1154,20 +1206,98 @@ void statement()
         *++code = JMP;
         *++code = (int)b;
         *end = (int)(code + 1);
+
+        // 处理break和continue列表中的跳转地址
+        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCListSize)
+        {
+            if (list_pos[Loop] == (int)cur_loop)
+            {
+                *(int*)list_pos[BCAddress] = (int)(code + 1);
+                list_pos[Loop] = 0;
+                list_pos[BCAddress] = 0;
+            }
+        }
+        for (list_pos = continue_list; *list_pos; list_pos = list_pos + BCListSize)
+        {
+            if (list_pos[Loop] == (int)cur_loop)
+            {
+                *(int*)list_pos[BCAddress] = (int)b; // continue will goto iter statement
+                list_pos[Loop] = 0;
+                list_pos[BCAddress] = 0;
+            }
+        }
     }
     // do, statement, while, "(", [expression], ")", ";"
     else if (token == Do)
     {
         match(Do);
         a = code + 1;
+        cur_loop = a;   // 保存当前循环，for break & continue
         statement();
         match(While);
         match('(');
+        b = code + 1;   // for continue
         expression(Comma);
         match(')');
         match(';');
         *++code = JNZ;
         *++code = (int)a;
+
+        // 处理break和continue列表中的跳转地址
+        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCListSize)
+        {
+            if (list_pos[Loop] == (int)cur_loop)
+            {
+                *(int*)list_pos[BCAddress] = (int)(code + 1);
+                list_pos[Loop] = 0;
+                list_pos[BCAddress] = 0;
+            }
+        }
+        for (list_pos = continue_list; *list_pos; list_pos = list_pos + BCListSize)
+        {
+            if (list_pos[Loop] == (int)cur_loop)
+            {
+                *(int*)list_pos[BCAddress] = (int)b; // continue will goto condition
+                list_pos[Loop] = 0;
+                list_pos[BCAddress] = 0;
+            }
+        }
+    }
+    // break, ";"
+    else if (token == Break)
+    {
+        // 当前不在循环中，报错
+        if (!cur_loop)
+        {
+            printf("%d: invalid break statement, not in a loop\n", line);
+            exit(-1);
+        }
+        match(Break);
+        match(';');
+        
+        *++code = JMP;
+        // 添加当前需要填充的地址到break列表末尾
+        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCAddress) ;
+        list_pos[Loop] = (int)cur_loop;
+        list_pos[BCAddress] = (int)++code;
+    }
+    // continue, ";"
+    else if (token == Continue)
+    {
+        // 当前不在循环中，报错
+        if (!cur_loop)
+        {
+            printf("%d: invalid continue statement, not in a loop\n", line);
+            exit(-1);
+        }
+        match(Continue);
+        match(';');
+        
+        *++code = JMP;
+        // 添加当前需要填充的地址到continue列表末尾
+        for (list_pos = continue_list; *list_pos; list_pos = list_pos + BCAddress) ;
+        list_pos[Loop] = (int)cur_loop;
+        list_pos[BCAddress] = (int)++code;
     }
     // "{", {statement}, "}"
     else if (token == '{')
@@ -1201,6 +1331,9 @@ void statement()
         expression(Comma);
         match(';');
     }
+
+    // 恢复当前循环
+    cur_loop = tmp_loop;
 }
 
 /*
@@ -1382,6 +1515,8 @@ func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
 */
 void function_declaration()
 {
+    cur_loop = 0;
+
     match('(');
     function_parameter();
     match(')');
@@ -1556,6 +1691,8 @@ statement = if_statement
         | while_statement
         | for_statement
         | do_while_statement
+        | break_statement
+        | continue_statement
         | "{", {statement}, "}"
         | return, [expression], ";"
         | [expression], ";";
@@ -1563,6 +1700,8 @@ if_statement = if, "(", expression, ")", statement, [else, statement];
 while_statement = while, "(", expression, ")", statement;
 for_statement = for, "(", [expression], ";", [expression], ";", [expression], ")", statement;
 do_while_statement = do, statement, while, "(", [expression], ")", ";";
+break_statement = break, ";";
+continue_statement = continue, ";";
 */
 void parse()
 {
@@ -1583,7 +1722,6 @@ int run_vm()
     int op, *tmp;
     while (1)
     {
-
         op = *pc++;
         cycle++;
         if (debug == 1)
@@ -1666,7 +1804,7 @@ int main(int argc, char** argv)
     }
     if (argc < 1)
     {
-        printf("uasege: jatcc [-d] xxx.c [args to main]\n");
+        printf("usage: jatccex [-d] xxx.c [args to main]\n");
         return -1;
     }
 
@@ -1688,21 +1826,35 @@ int main(int argc, char** argv)
         printf("Could not malloc(%d) for stack area\n", poolsize);
         return -1;
     }
+    memset(code, 0, poolsize);
+    memset(data, 0, poolsize);
+    memset(stack, 0, poolsize);
+    
+    // 为parser分配内存
     if (!(symbols = (int*)malloc(poolsize)))
     {
         printf("Could not malloc(%d) for symbol table\n", poolsize);
         return -1;
     }
-    memset(code, 0, poolsize);
-    memset(data, 0, poolsize);
-    memset(stack, 0, poolsize);
+    if (!(break_list = (int*)malloc(8 * 1024))) // 8KB
+    {
+        printf("Could not malloc(%d) for break list of parser\n", 8 * 1024);
+        exit(-1);
+    }
+    if (!(continue_list = (int*)malloc(8 * 1024))) // 8KB
+    {
+        printf("Could not malloc(%d) for continue list of parser\n", 8 * 1024);
+        exit(-1);
+    }
     memset(symbols, 0, poolsize);
+    memset(break_list, 0, 8 * 1024);
+    memset(continue_list, 0, 8 * 1024);
 
-    src = (char*)"char do else enum for if int return sizeof while "
+    src = (char*)"break char continue do else enum for if int return sizeof while "
         "open read close write printf malloc free memset memcmp exit void main";
 
     // 将关键字提前添加到符号表，在词法分析时关键字走标识符的识别流程，由于已经在符号表中，所以直接返回符号表的结果
-    tmp = Char;
+    tmp = Break;
     while (tmp <= While)
     {
         next();

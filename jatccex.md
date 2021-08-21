@@ -100,6 +100,7 @@ for (init; condition; iter)
 
 do
 {
+    xxx;
     break;
 } while(condition);
 ```
@@ -109,13 +110,22 @@ do
 break_statement = break, ";";
 ```
 
-先实现循环中的break，switch暂不实现，实现时再考虑switch中的break。
+先实现循环中的break，switch暂未实现，实现时再考虑switch中的break。
+
+循环中的break的作用是结束循环，跳转到循环后的第一条语句执行。
 
 生成代码：
 ```
 JMP [end]
 ```
-需要记录外层循环的结束点，直接JMP就行。
+需要记录外层循环的结束点，直接JMP就行，解析到break时还没有结束循环的解析，所以需要记录所有保存break对应的JMP指令的跳转地址的code段地址。因为循环可以嵌套，所以只用一个全局的还不够，还需要能够唯一地标识一个循环，这里就选用循环开始的代码段地址好了。为了方便直接存在同一个列表中，而不是每个循环存一个列表，那么就需要两个域，一个循环开始地址，一个保存用来保存break跳转地址的code段地址。continue同理。
+
+这个循环地址对于`while` `do while` `for`都选择上述生成代码中的地址`[a]`。
+
+还是定义一个宏，后续实现`struct`后会改用`struct`：
+```C++
+enum Break_continue_list_domain { Loop = 0, BCAddress, ListSize };
+```
 
 ### continue
 
@@ -140,30 +150,18 @@ do
 
 文法：
 ```EBNF
-break_statement = continue, ";";
+continue_statement = continue, ";";
 ```
+
+`continue`语句的作用是结束此轮循环，跳转到条件开始执行。
 
 生成代码：
 
-`while`和`do while`中的`continue`，其中`[entry]`是循环入口地址。
 ```
 JMP [entry]
 ```
-`for`中的`continue`：
-```
-[init]
-[condition]/IMM 1       <------ [a] // has condition/no condition
-JNZ [c]
-JMP [end]
-[iter]                  <------ [b]
-JMP [a]
-[for_statements]        <------ [c]
-JMP [b]
-...                     <------ [end]
 
-// continue
-JMP [b]
-```
+在`while`和`do while`应该是条件判断的位置，分别位于开始和末尾，`for`中则是`final`语句位置。
 
 ### goto & label
 

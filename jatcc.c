@@ -1567,7 +1567,7 @@ int main(int argc, char** argv)
     }
     if (argc < 1)
     {
-        printf("uasege: jatcc [-d] xxx.c [args to main]\n");
+        printf("usage: jatcc [-d] xxx.c [args to main]\n");
         return -1;
     }
 
