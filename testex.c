@@ -205,6 +205,38 @@ endloop:
     test(result, 5050);
 }
 
+// test for enumeration
+// definition, global declaration, return type, paramter, local declaration, cast, sizeof
+enum TestStatusEnum { GoodStatus = 1, BadStatus = 100, NotSureStatus, AreYouSureStatus, AreYouSeriousStatus,  };
+enum TestStatusEnum status;
+enum TestStatusEnum getBossStatus(enum TestStatusEnum input)
+{
+    if (input == GoodStatus || input == BadStatus)
+        return AreYouSureStatus;
+    else if (input == NotSureStatus)
+        return AreYouSeriousStatus;
+    else
+        return BadStatus;
+}
+
+void test_enumeration()
+{
+    enum TestStatusEnum myStatus;
+
+    test_class = (char*)"conditionals enumeration";
+    local_count = 1;
+
+    myStatus = GoodStatus;
+    test(myStatus, GoodStatus);
+    test(getBossStatus(myStatus), AreYouSureStatus);
+    test(getBossStatus(NotSureStatus), AreYouSeriousStatus);
+
+    status = (enum TestStatusEnum)102;
+    test(status, AreYouSureStatus);
+    test(sizeof(enum TestStatusEnum), sizeof(int));
+}
+
+
 int main()
 {
     total_count = 0;
@@ -215,6 +247,7 @@ int main()
     test_break();
     test_continue();
     test_goto();
+    test_enumeration();
 
     printf("total: %d, passed: %d, failed: %d\n", total_count, total_count - failed_count, failed_count);
     return 0;

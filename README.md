@@ -17,7 +17,7 @@
 - 运算符：`, = ?: || && | ^ & == != < > <= >= << >> + - * / % ++ -- [] ()`
 - 函数定义
 
-由于实现带来的限制：
+其中由于实现带来的限制：
 - 变量定义时不能初始化。
 - 函数内局部变量的定义必须集中放在函数开头。
 - `void`将被视为`char`。
@@ -28,15 +28,17 @@
 
 `jatccex.c`添加的扩展：
 - 控制流：`for` `do while` `break` `continue` `goto`
+- 命名`enum`支持，简单等同于`int`
+- 同样自举
 
 正在支持：
-- `switch`
 - 浮点类型支持
 - 函数前向声明
-- 命名`enum`支持，简单等同于`int`
 - `union` `struct`类型支持，相关操作符`. ->`支持
 - 使用支持了的特性替换部分实现细节
-- 同样自举
+
+实现带来的限制：
+- 现有线性解析框架下难以实现`switch`语句，不支持。
 
 ## 构建与测试
 
@@ -59,6 +61,7 @@ gcc jatcc.c -o jatcc
 gcc jatccex.c -o jatccex
 ./jatccex testex.c
 ./jatccex jatccex.c testex.c
+./jatccex jatccex.c test.c
 ./jatccex jatcc.c test.c
 ```
 
@@ -81,7 +84,7 @@ gcc jatccex.c -o jatccex
 
 ## TODO
 
-- struct & union & enum ?
+- struct & union ?
 - typedef ?
 - x86 JIT compiling ?
 

@@ -23,10 +23,10 @@ int token;      // 当前token
 int token_val;  // 当前token是常量或字符串字面值时用来记录值
 char *src;      // 源码
 int line;       // 行号
-int last_token;         // 支持记录回溯token流的功能
-int last_token_val;     // 支持记录回溯token流的功能
-char* last_src;         // 支持记录回溯token流的功能
-int last_line;          // 支持记录回溯token流的功能
+int last_token;         // 支持记录和回溯token流的功能
+int last_token_val;     // 支持记录和回溯token流的功能
+char* last_src;         // 支持记录和回溯token流的功能
+int last_line;          // 支持记录和回溯token流的功能
 
 // parser
 int *symbols;   // 符号表，动态数组模拟结构体
@@ -94,7 +94,7 @@ enum Token_type
 // 标识符的类型，用在符号表中的Class域
 enum Identifier_type
 {
-    EnumVal = 200,  // enum value as constant
+    EnumVal = 200,  // constant enum value
     Fun,            // function
     Sys,            // system call (native-call)
     Glo,            // global variables
@@ -412,6 +412,50 @@ void match(int tk)
 }
 
 /*
+解析类型：用于一定是类型的场景：局部变量声明、函数参数、类型转换、sizeof()运算符。
+1. 全局变量定义和函数定义可能是类型定义，有其他情况，单独解析。
+2. 非法类型返回-1，如果类型可以省略，比如函数参数里面，应该在外层加以处理，使用默认的int。
+3. 只处理基本类型，指针在外层处理。
+*/
+int parse_type()
+{
+    int type;
+    type = INT; // 默认类型就是INT
+    
+    if (token != Int && token != Char && token != Enum)
+    {
+        return -1;
+    }
+
+    if (token == Int)
+    {
+        match(Int);
+    }
+    else if (token == Char)
+    {
+        type = CHAR;
+        match(Char);
+    }
+    // 自定义 enum
+    else if (token == Enum)
+    {
+        match(Enum);
+        if (token == Id && current_id[Class] == EnumType)
+        {
+            type = INT; // 视为int
+            match(Id);
+        }
+        else
+        {
+            printf("%d: invalid enum type\n", line);
+            exit(-1);
+        }
+    }
+
+    return type;
+}
+
+/*
 解析表达式：
 
 对于每个运算符，递归地向后处理高于当前运算符优先级的运算符后再回来处理当前的运算。
@@ -455,20 +499,16 @@ void expression(int level)
     {
         match(Sizeof);
         match('(');
-        expr_type = INT;
-
-        if (token == Int)
+        expr_type = parse_type();
+        if (expr_type == -1)
         {
-            match(Int);
-        }
-        else if (token == Char)
-        {
-            match(Char);
-            expr_type = CHAR;
+            printf("%d: invalid type in sizeof()\n", line);
+            exit(-1);
         }
 
         while (token == Mul)
         {
+            match(Mul);
             expr_type = expr_type + PTR;
         }
 
@@ -563,7 +603,7 @@ void expression(int level)
 
             // 加载变量值到ax，地址已经由上面LEA或者IMM加载到了ax中
             expr_type = id[Type];
-            *++code = (expr_type == Char) ? LC : LI;
+            *++code = (expr_type == CHAR) ? LC : LI;
         }
     }
     // 强制类型转换、括号运算符
@@ -571,10 +611,14 @@ void expression(int level)
     {
         match('(');
         // 强制类型转换，获取转换类型，并直接修改expr_type中保存的类型
-        if (token == Int || token == Char)
+        if (token == Int || token == Char || token == Enum)
         {
-            tmp = (token == Char) ? CHAR : INT; // cast target type
-            match(token);
+            tmp = parse_type();
+            if (tmp == -1)
+            {
+                printf("%d: invalid cast target type\n", line);
+                exit(-1);
+            }
             while (token == Mul)
             {
                 match(Mul);
@@ -1433,7 +1477,8 @@ void statement()
 /*
 解析函数参数列表
 param_decl = type, {"*"}, id, {",", type {"*"}, id};
-type = int | char;
+type = int | char | user_defined_type;
+user_defined_type = (enum | union | struct), id;
 */
 void function_parameter()
 {
@@ -1442,33 +1487,29 @@ void function_parameter()
     params = 0;
     while (token != ')')
     {
-        // 基本类型
-        type = INT;
-        if (token == Int)
+        type = parse_type();
+        if (type == -1) // 没有类型，使用默认的int
         {
-            match(Int);
+            type = INT;
         }
-        else if (token == Char)
-        {
-            type = CHAR;
-            match(Char);
-        }
-        // 指针类型
+        
         while (token == Mul)
         {
-            match(Mul);
             type = type + PTR;
+            match(Mul);
         }
 
         // 参数名称
         if (token != Id)
         {
             printf("%d: invalid parameter declaration\n", line);
+            exit(-1);
         }
         // 已经定义同名局部变量
         else if (current_id[Class] == Loc)
         {
             printf("%d: duplicate parameter declaration\n", line);
+            exit(-1);
         }
         match(Id);
 
@@ -1500,7 +1541,8 @@ void function_parameter()
 解析函数体
 func_body = {var_decl}, {statement};
 var_decl = type {"*"}, id, {",", id}, ";";
-type = int | char;
+type = int | char | user_defiend_type;
+user_defined_type = (enum | union | struct), id;
 
 |    ....       | high address
 +---------------+
@@ -1539,11 +1581,12 @@ void function_body()
     int local_pos; // 局部变量计数
     local_pos = 0;
 
-    // 局部变量声明
-    while (token == Char || token == Int)
+    // 局部变量声明，内置类型或者自定义类型，类型不能省略
+    while (token == Char || token == Int || token == Enum)
     {
-        basetype = (token == Int) ? INT : CHAR;
-        match(token);
+        // 一定是有效的类型，while已经做了判断
+        basetype = parse_type();
+
         while (token != ';')
         {
             type = basetype;
@@ -1700,23 +1743,51 @@ void enum_body()
 global_decl = enum_decl | func_decl | var_decl;
 enum_decl = enum, [id], "{", enum_body ,"}";
 func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
-var_decl = type {"*"}, id, {",", id}, ";";
+var_decl = type {"*"}, id, {",", {"*"}, id}, ";";
+ret_type = void | type, {"*"};
+type = int | char | user_defined_type;
+user_defined_type = (enum | union | struct), id;
 */
 void global_declaration()
 {
     int type;   // 变量的数据类型
+    int *id;
 
     basetype = INT;
 
-    // 解析enum，只支持匿名enum，命名的enum也解释为匿名
+    // 解析enum: enum定义或变量声明或者作为返回值定义函数
     if (token == Enum)
     {
         match(Enum);
-        if (token != '{')
+        // 可能是变量声明或者命名enum类型定义
+        if (token == Id)
         {
-            match(Id); // 跳过enum的名称
+            id = current_id;
+            match(Id);
+            // 不识别的新id，那只能是类型定义
+            if (id[Class] == 0)
+            {
+                id[Class] = EnumType;
+                id[Type] = Enum;        // 这个域意义不大，这里不区分枚举类型，都解释为int
+                match('{');
+                enum_body();
+                match('}');
+            }
+            // 已知标识符，但不是enum类型
+            else if (id[Class] != EnumType)
+            {
+                printf("%d: known identifier can not be new enum name in definition\n", line);
+                exit(-1);
+            }
+            // 已定义的enum类型
+            else
+            {
+                basetype = INT;
+                goto define_globals;
+            }
         }
-        if (token == '{')
+        // 匿名enum定义
+        else
         {
             match('{');
             enum_body();
@@ -1726,7 +1797,7 @@ void global_declaration()
         return;
     }
 
-    // 类型
+    // 内置类型
     if (token == Int)
     {
         match(Int);
@@ -1737,6 +1808,7 @@ void global_declaration()
         basetype = CHAR;
     }
 
+define_globals:
     // 变量或者函数定义，直到变量结束;，函数结束}
     while (token != ';' && token != '}')
     {
@@ -1801,7 +1873,8 @@ enum_decl = enum, [id], "{", id, ["=", number], {",", id, ["=", number]} ,"}";
 func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
 param_decl = type, {"*"}, id, {",", type {"*"}, id};
 ret_type = void | type, {"*"};
-type = int | char;
+type = int | char | user_defined_type;
+user_defined_type = (enum | union | struct), id;
 func_body = {var_decl}, {statement};
 var_decl = type {"*"}, id, {",", id}, ";";
 statement = if_statement
