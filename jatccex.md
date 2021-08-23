@@ -15,8 +15,11 @@
     - [影响](#%E5%BD%B1%E5%93%8D)
   - [enum](#enum)
   - [union & struct](#union--struct)
-    - [文法](#%E6%96%87%E6%B3%95)
-    - [.和->运算符](#%E5%92%8C-%E8%BF%90%E7%AE%97%E7%AC%A6)
+    - [语法](#%E8%AF%AD%E6%B3%95)
+    - [选择实现的部分](#%E9%80%89%E6%8B%A9%E5%AE%9E%E7%8E%B0%E7%9A%84%E9%83%A8%E5%88%86)
+    - [类型解析实现](#%E7%B1%BB%E5%9E%8B%E8%A7%A3%E6%9E%90%E5%AE%9E%E7%8E%B0)
+    - [类型支持](#%E7%B1%BB%E5%9E%8B%E6%94%AF%E6%8C%81)
+    - [运算符支持](#%E8%BF%90%E7%AE%97%E7%AC%A6%E6%94%AF%E6%8C%81)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -31,9 +34,11 @@
 最终实现的C语言子集的文法：
 ```EBNF
 program = {global_decl};
-global_decl = enum_decl | func_decl | var_decl;
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl;
 enum_decl = enum, [id], "{", id, ["=", number], {",", id, ["=", number]} ,"}";
 func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
+struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
+union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
 param_decl = type, {"*"}, id, {",", type {"*"}, id};
 ret_type = void | type, {"*"};
 type = int | char | user_defined_type;
@@ -59,7 +64,7 @@ break_statement = break, ";";
 continue_statement = continue, ";";
 ```
 
-现在才发现原来C语言的enum/union/struct变量声明时必须要加enum/union/struct关键字。写了这么多年C++（C++中不要求）的我震惊了，才理解为什么C语言里面定义结构都要用typedef定义一个同名的类型别名。当然这里不支持typedef，就遵循标准，其实还降低了语法分析的难度。
+现在才发现原来C语言的`enum/union/struct`变量声明时必须要加`enum/union/struct`关键字。写了好几年C++（C++中不要求）的我震惊了，才理解为什么C语言里面定义结构都要用typedef定义一个同名的类型别名。当然这里不支持typedef，就遵循标准，其实还降低了语法分析的难度。
 ```C++
 typedef struct node 
 {
@@ -332,8 +337,8 @@ enum Var_type { CHAR = 0, INT, ENUM, UNION = 100, STRUCT = 500, PTR = 1000 };
 
 添加了自定义类型之后的影响范围（针对union和struct）：
 - 类型定义。
-- 变量类型解析：全局、局部、函数参数。
-- 自定义类型是否可以作为函数返回值类型，union和struct在ax中存不下。
+- 变量类型解析：全局、局部。
+- 自定义类型是否可以作为函数返回值类型和函数参数，union和struct在ax中存不下。
 - 能否使用运算符，除了enum当做int之外，union和struct有自己的取成员运算符，内置运算符基本都是不支持的。
     - 不应该作为类型转换的目标类型。
     - 支持`. ->`。
@@ -362,6 +367,198 @@ user_defined_type = (enum | union | struct), id;
 
 ## union & struct
 
-### 文法
+要实现得先明白[union](https://zh.cppreference.com/w/c/language/union)和[struct](https://zh.cppreference.com/w/c/language/struct)语法是什么样的。最新版本加的新特性不用关新，只需要关心最基本功能。
 
-### .和->运算符
+### 语法
+
+unoin和struct的文法：
+```EBNF
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl;
+struct_decl = struct, [id], "{", {var_decl}, "}", ";";
+union_decl = union, [id], "{", {var_decl}, "}", ";";
+```
+两者很类似，但有区别，语法细节；
+- 名字是可选的，声明列表中允许任意数量变量声明，位域声明和静态断言声明。
+- 不能为空。
+- 不允许不完整类型的成员和函数类型的成员，但结构中可以允许末尾拥有一个不完整的柔性数组成员，像这样`int a[];`。
+- 在结构体对象内，其成员的地址按照成员定义（及位域分配单元的地址）的顺序递增，能转型指向结构体的指针为指向其首成员（或者若首成员为位域，则指向其分配单元）的指针。类似的，能转型指向结构体首成员的指针为指向整个结构体的指针。在任意二个成员间和最后的成员后可能存在无名的填充字节，但首成员前不会有。结构体的大小至少与其成员的大小之和一样大。
+- 联合体和结构体中，都支持类型为不带名字的结构体的无名结构体成员被称作**匿名结构体**。每个匿名结构体的成员被认为是外围结构体或联合体的成员。若外围结构体或联合体亦为匿名，则递归应用此规则。
+```C++
+struct v {
+    union { // 匿名联合体
+        struct { int i, j; }; // 匿名结构体
+        struct { long k, l; } w;
+    };
+    int m;
+} v1;
+
+v1.i = 2;   // 合法
+v1.k = 3;   // 非法：内层结构体非匿名
+v1.w.k = 5; // 合法
+```
+- 都允许前置声明,隐藏任何先前在标签命名空间中声明的 `name` 的含义，并在当前作用域中声明 `name` 为新的结构体名，可以在之后定义该结构体。在定义出现之前，此结构体名拥有不完整类型。不完整类型不能直接在结构体或者联合体中引用，但可以通过指针引用。
+```C++
+struct name;
+union name;
+```
+- 可以在局部作用域声明和定义结构和联合体。
+- [结构体与联合体初始化](https://zh.cppreference.com/w/c/language/struct_initialization)：支持使用非空、花括号包围、逗号分隔的列表作为初始化器。
+    - 初始化联合体时，初始化器列表必须只有一个成员，它初始化联合体的首个成员，除非使用指派初始化器。
+    - 若结构体或联合体的成员是数组、结构体或联合体，则初始化器的花括号可以嵌套。某些情况还可以进行简化，支持指派符初始化。
+    - 不能提供多余成员的初始化器。
+- 结构体和联合体在其定义结束前不完整，结构体不能拥有其自身类型的成员。允许指向其自身类型的指针成员是允许的，而这通常用于实现链表或树的节点。
+- 因为结构体声明不建立作用域，故在 结构体声明列表 中引入的嵌套类型、枚举及枚举项会在定义结构体的外围作用域可见。
+```C++
+struct node
+{
+    union head
+    {
+        int i;
+        char c;
+        void *p;
+    } data;
+    struct node *left;
+    struct node *right;
+};
+
+union head h;
+```
+
+### 选择实现的部分
+
+实现选择：
+- 不支持位域声明，静态断言声明，不支持struct的柔性数组成员，因为连数组都没有支持。
+- 不支持嵌套定义，结构体或者联合体中要使用结构体或者联合体成员可以将其放在外面定义。
+- 不支持匿名结构体定义，因为需要名称来做哈希，没有类型名不好做哈希。
+- 不支持定义结构时声明变量，enum也是类似的。感觉并不难做，只是没有必要，后续也可以考虑加上。
+- 不支持在局部作用域声明和定义结构和联合体，仅能在全局作用域定义和声明。
+- 支持前向声明。不支持的话，结构存在的意义可能会被大大削减，毕竟相互通过指针引用非常常见。
+- 部分支持初始化：支持初始化器，支持最简单的嵌套初始化，不支持指派符。对于union也就仅支持仅有一个成员的初始化器。
+- 结构体成员按照`sizeof(int)`大小对齐，大小是`sizeof(int)`的整数倍。
+- 联合体取最大成员长度（一定是`sizeof(int)`的整数倍），最小是一倍的`sizeof(int)`，全部成员地址都一样，全部从联合体首地址开始存。
+- `char`、 `int`、指针都占用`sizeof(int)`大小的字节，char只使用第一个字节。32就是4个字节，64位就是8个，最后大小和每个域的偏移地址都一定是`sizeof(int)`整数倍。
+- 不支持结构和联合体的赋值，使用`memecpy`内存拷贝完成。
+- 不支持结构体或者联合体作为函数参数类型和返回值类型，返回值是存在ax中的，存不下，存在栈中的话就和现在的架构相违背了，需要很多特殊处理。但依然支持指针传递参数和返回值。
+
+支持的部分：
+```EBNF
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl;
+struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
+union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
+```
+
+### 类型解析实现
+
+考虑最简单的实现方式，用一个链表节点来表示一个结构体或者联合体类型或者一个它们的域，一个域的信息有：变量名称哈希、变量类型、大小、在整个结构中的偏移（union中所有域都是0）。
+```C++
+// union or struct domain
+struct us_domain
+{
+    int hash;
+    int type;
+    int size;
+    int offset;
+    struct us_domain* next;
+};
+
+struct us_domain* struct_symbols_list;
+struct us_domain* union_symbols_list;
+```
+线性列表`struct_symbols_list`保存所有的结构和联合体。这些元素表示一个个类型，每个元素都是一个链表的首节点。节点中`next`域指向后续节点是它的成员按声明顺序存放。
+
+举例：
+```C++
+struct node
+{
+    void *data;
+    struct node *left;
+    struct node *right;
+};
+union head
+{
+    int number;
+    struct node n;
+}
+```
+最终结构体的符号信息表中会是这样的；
+```
+struct_symbols_list:
+first element:
+[hash of node]     [hash of data]       [hash of left]           [hash of right] 
+[type of node]     [type of void*]      [type of node*]          [type of node*]
+[size of node]     [4]                  [4]                      [4]            
+[0]                [0]                  [4]                      [8]           
+[next]          -> [next]          ->   [next]            ->     [next]        -> 0
+
+union_symbols_list
+first element:
+[hash of head]      [hash of number]   [hash of n]   
+[type of head]      [type of int]      [type of node]
+[size of head]      [size of int]      [size of node]
+[0]                 [0]                [0]           
+[next]          ->  [next]          -> [next]        
+```
+结构和联合的类型由`Var_type`表示，`union`从100开始，`struct`从500开始，如果是复合了一层指针就加一个指针`PTR`，每新定义一个类型就+1，各自减去`UNION/STRUCT`就是他们在`struct_symbols_list/union_symbols_list`中的下标。这个类型就保存在符号表的`Class`域中。前向声明时就可以填充了，然后在结构体成员信息表中添加这一项，但`next`域为空。
+```C++
+enum Var_type { CHAR = 0, INT, ENUM, UNION = 100, STRUCT = 500, PTR = 1000 };
+```
+
+### 类型支持
+
+- 类型定义和前向声明，上一步已经做了。
+- 全局变量声明、局部变量声明。
+    - 全局变量，分配在data区，依赖于struct或者union的大小。从其符号信息表中获取。
+    - 局部变量分配在栈上，栈从高地址向低地址生长，所以结构和联合体变量的地址应该是最后一个单元紧邻下一个变量内存的首地址。所占单元数量是`sizeof(struct xxx) / sizeof(int)`，附加到`ENT`操作数上。
+    ```
+    int a;
+    struct node s;
+    int b;
+
+    分配内存:
+    ...             High address        reletive address to bp
+    variable a                          -1
+    end of struct s                     -2
+    ... 
+    begin of struct s                   -(1+sizeof(struct node)/sizeof(int)) <---- address of s
+    variable b
+    ...             Low addresss
+    ```
+- 作为函数返回值类型支持、函数参数声明。
+    - 因为函数返回值存储在ax中，是一个右值。如果用栈做保存会需要做很多多余的事情，选择不支持。
+    - 参数声明可以做，但是函数调用时需要做结构的复制，考虑还是不做了，用指针就行。实现赋值后可以考虑看要不要支持。
+    - 总是可以使用指针，指针和其他类型指针并无区别。
+
+### 运算符支持
+
+直接相关：
+- 强制类型转换：
+    - 指针复合类型转换直接做就行，用户应该为代码行为负责。
+    - `struct/union`类型不支持直接作为转换目标类型，报错。
+- `sizeof`运算符
+    - 编译期查找结构体和联合体符号信息表中获取大小生成加载到`ax`的代码即可。
+- 考虑左值和右值的处理。不支持右值，右值找不到地方存，仅支持左值。
+    - 所以不会支持赋值运算符。
+    - 不支持任何形式的结构体/联合体初始化器。
+- 左值的处理：
+    - 表达式中遇到标识符时，如果是变量，需要加载地址到ax，原先的处理已经完备。
+- 新增对结构体和联合体左值的取成员运算符`. ->`支持。
+    - `.` `->`优先级最高。
+    - 对原始类型仅支持 `.`。
+    - 一层指针支持`->`。
+    - 统一支持，如果是`->`，这时候指针地址已经在ax中，是否有效应该由程序员确保。如果是`.`，则必须确保左边是一个左值，也就是上一条指令是`LC/LI`，取消加载以得到地址。然后生成代码`PUSH` `IMM offset` `ADD` `LI/LC`，对地址做偏移之后在ax中得到的偏移后的地址就是成员的地址，也是一个左值。查找成员类型并更改表达式类型，前面在做一些类型判断即可完美支持。联合体可以不做偏移指针的操作，约定都从联合体开始地址开始保存，只需要`LI/LC`。还可以简单做一个优化，如果是偏移`0`也就是第一个成员也不做。
+- 指针类型：`* & + - ++ -- []`
+    - 解引用和取地址就是对类型操作减去或者加上一个PTR，不需要修改。
+    - 指针类型和整数相加，需要将整数乘以单元大小。对一层结构和联合体进行处理。
+    - 指针与指针相减，结果需要除以单元大小。对一层结构和联合体进行处理。
+    - 指针和整数相减，指针偏移，同样乘以单元大小。
+    - `++ --`同理。
+    - `[]`就是偏移，也同理。
+
+总结：
+
+- 对原始类型仅支持 `.` `sizeof` 操作符。
+- 对一层结构体/联合体指针额外支持`->`操作符。
+- 对所有层数的指针支持指针支持的通用操作 `+ - ++ -- [] * &`，但一层的时候需要考虑单元大小。
+- 其他所有情况都不合法，进行类型检查和报错。主要是`= ?: || && | ^ & == != < > <= >= << >> * / % ()`提供报错信息，运算前统一检查，不在每个运算符中单独检查。
+- 不对结构和联合支持赋值运算符，使用`memcpy`内存拷贝来做复制。
+

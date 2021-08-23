@@ -27,18 +27,24 @@
 - 类型系统实现得非常简单，支持数组下标操作但不支持数组定义。
 
 `jatccex.c`添加的扩展：
-- 控制流：`for` `do while` `break` `continue` `goto`
+- 控制流：完美支持 `for` `do while` `break` `continue` `goto`
 - 命名`enum`支持，简单等同于`int`
+- 有限地支持了`union`和`struct`的核心特性，添加运算符`. ->`
+    - 不支持嵌套声明、匿名结构/联合、位域声明、柔性数组、初始化器等花里胡哨的东西。
+    - 不支持作为函数参数和返回值，但在任何情况都可以使用指针。
+    - 不支持赋值运算符，使用`memcpy`拷贝内存替代。
+    - 支持全局变量和局部变量声明。
+    - 支持使用指针进行的一切操作。
+    - 支持前向声明。
+    - 按照 `sizeof(int)` 字节对齐。
 - 同样自举
 
 正在支持：
-- 浮点类型支持
 - 函数前向声明
-- `union` `struct`类型支持，相关操作符`. ->`支持
-- 使用支持了的特性替换部分实现细节
+- 浮点类型
 
 实现带来的限制：
-- 现有线性解析框架下难以实现`switch`语句，不支持。
+- 现有线性解析框架下难以实现`switch`语句，不做支持。
 
 ## 构建与测试
 
@@ -78,14 +84,13 @@ gcc jatccex.c -o jatccex
 
 - 启发：[Bilibili-700行手写编译器](https://www.bilibili.com/video/BV1Kf4y1V783)
 - 间接参考：[rswier/c4](https://github.com/rswier/c4)，一个500行的能够自举的简易C语言编译器。
-- 源码基本上参考学习自：[手把手教你构建 C 语言编译器](https://lotabout.me/2015/write-a-C-interpreter-0/)系列，[lotabout/write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter)
+- 直接大量参考：[手把手教你构建 C 语言编译器](https://lotabout.me/2015/write-a-C-interpreter-0/)系列，[lotabout/write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter)
 - 更多关于C4以及实现一个C编译器相关的细节：[知乎-RednaxelaFX关于C4的文章](https://www.zhihu.com/question/28249756/answer/84307453)
 - c4改进的x86 JIT编译器：[EarlGray/c4](https://github.com/EarlGray/c4)
 
 ## TODO
 
-- struct & union ?
-- typedef ?
+- float & double ?
 - x86 JIT compiling ?
 
-欢迎任何有意义的改进、扩展与建议。
+欢迎任何有意义的改进、扩展、建议与BUG反馈。

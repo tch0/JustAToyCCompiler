@@ -23,32 +23,52 @@ int token;      // 当前token
 int token_val;  // 当前token是常量或字符串字面值时用来记录值
 char *src;      // 源码
 int line;       // 行号
-int last_token;         // 支持记录和回溯token流的功能
-int last_token_val;     // 支持记录和回溯token流的功能
-char* last_src;         // 支持记录和回溯token流的功能
-int last_line;          // 支持记录和回溯token流的功能
+int last_token;     // 支持记录和回溯token流的功能
+int last_token_val; // 支持记录和回溯token流的功能
+char* last_src;     // 支持记录和回溯token流的功能
+int last_line;      // 支持记录和回溯token流的功能
 
 // parser
-int *symbols;   // 符号表，动态数组模拟结构体
-int *idmain;    // main函数的符号表记录
-int *current_id;// 当前正在操作的符号表记录
-int basetype;   // 变量、函数和类型定义的基本类型，是指针类型时使用
-int expr_type;  // 表达式类型
-int index_of_bp;// 函数调用时第一个参数相对bp的位置，函数的参数数量+1
+int *symbols;       // 符号表，动态数组模拟结构体
+int *idmain;        // main函数的符号表记录
+int *current_id;    // 当前正在操作的符号表记录
+int basetype;       // 变量、函数和类型定义的基本类型，是指针类型时使用
+int expr_type;      // 表达式类型
+int index_of_bp;    // 函数调用时第一个参数相对bp的位置，函数的参数数量+1
 int *break_list;    // break语句跳转地址的列表
 int *continue_list; // continue语句跳转地址列表
 int *cur_loop;      // 保存当前正在解析的循环的地址，用来唯一标识一个循环
 int *label_list;    // goto语句跳转地址列表
 
 // debug
-int debug;      // 调试模式
-int *last_code; // 上一次打印至的code段指针
+int debug;          // 调试模式
+int *last_code;     // 上一次打印至的code段指针
+
+// union or struct domain
+struct us_domain
+{
+    int hash;               // hash of type name or var name
+    int type;               // type of user defined struct or domain
+    int size;               // size of type or domain
+    int offset;             // offset in struct of domain
+    struct us_domain* next; // first domain for type or next domain for domain, indicate whether a struct/union has been already defined or not.
+};
+
+// 结构体和联合体信息的列表，每个元素都是一个链表的表头，存储struct和union的信息，链表中余下的节点按顺序存储它的域
+struct us_domain *struct_symbols_list;
+struct us_domain *union_symbols_list;
+struct us_domain *us_domains_list;      // 集中存储链表上述两个列表中链表的节点，用malloc单独分配链表节点的话给人感觉就不整体了，不是必要
+
+int cur_struct_type;        // 当前struct类型
+int cur_union_type;         // 当前union类型
 
 
 /*
 变量类型，如果是char*则表示为CHAR + PTR，char**则表示为CHAR + PTR + PTR。
 枚举最终解释为整型常量，不支持命名枚举。
 用最终类型模PTR得到基本类型，整除PTR则是指针层数，只存在指针这一种复合类型情况下很取巧的做法。
+union的类型从100开始，struct从500开始，每定义一个类型就+1,各自减去UNION/STRUCT就是他们在
+struct_symbols_list/union_symbols_list中的下标。
 */
 enum Var_type { CHAR = 0, INT, ENUM, UNION = 100, STRUCT = 500, PTR = 1000 };
 
@@ -72,6 +92,8 @@ enum Token_type
     Int,            // int
     Return,         // return
     Sizeof,         // sizeof
+    Struct,         // struct
+    Union,          // union
     While,          // while
     // operators in precedence order
     Comma,          // ,
@@ -88,7 +110,7 @@ enum Token_type
     Add, Sub,       // + -
     Mul, Div, Mod,  // * / %
     Inc, Dec,       // ++ --
-    Brak            // [
+    Brak, Dot, Gmbp // [] . -> (get member by pointer)
 };
 
 // 标识符的类型，用在符号表中的Class域
@@ -132,8 +154,9 @@ enum Instruction
     LEA = 100, IMM, JMP, JSR, JZ, JNZ, ENT, ADJ, // 1个操作数，剩余的都没有操作数
     LEV, LI, LC, SI, SC, PUSH,
     OR, XOR, AND, EQ, NE, LT, GT, LE, GE, SHL, SHR, ADD, SUB, MUL, DIV, MOD,
-    OPEN, READ, CLOS, WRIT, PRTF, MALC, FREE, MSET, MCMP, EXIT
+    OPEN, READ, CLOS, WRIT, PRTF, MALC, FREE, MSET, MCMP, MCPY, EXIT
 };
+
 
 /*
 做词法分析（tokenize/lex）：从源码获取到下一个token，得到这个token的类型和值。
@@ -156,7 +179,7 @@ void next()
                     op = *last_code;
                     printf("0x%.10X: %.4s", (int)last_code++, &"LEA ,IMM ,JMP ,JSR ,JZ  ,JNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PUSH,"
                         "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                        "OPEN,READ,CLOS,WRIT,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[(op - LEA) * 5]);
+                        "OPEN,READ,CLOS,WRIT,PRTF,MALC,FREE,MSET,MCMP,MCPY,EXIT,"[(op - LEA) * 5]);
                     if (op >= JMP && op <= JNZ)
                         printf("0x%.10X\n", *last_code++);
                     else if (op <= ADJ)
@@ -312,7 +335,7 @@ void next()
         else if (token == ',') { token = Comma; return; }
         else if (token == '=') { if (*src == '=') { src++; token = Eq; } else token = Assign; return; } // = ==
         else if (token == '+') { if (*src == '+') { src++; token = Inc; } else token = Add; return; } // + ++
-        else if (token == '-') { if (*src == '-') { src++; token = Dec; } else token = Sub; return; } // - --
+        else if (token == '-') { if (*src == '-') { src++; token = Dec; } else if (*src == '>') { src++, token = Gmbp; } else token = Sub; return; } // - -- ->
         else if (token == '!') { if (*src == '=') { src++; token = Ne; } return; } // != !
         else if (token == '<') { if (*src == '=') { src++; token = Le; } else if (*src == '<') { src++; token = Shl; } else token = Lt; return; } // < <= <<
         else if (token == '>') { if (*src == '=') { src++; token = Ge; } else if (*src == '>') { src++; token = Shr; } else token = Gt; return; } // > >= >>
@@ -323,6 +346,7 @@ void next()
         else if (token == '*') { token = Mul; return; } // *
         else if (token == '?') { token = Cond; return; } // ?
         else if (token == '[') { token = Brak; return; } // [
+        else if (token == '.') { token = Dot; return; } // .
         else if (token == '~' || token == ';' || token == '{' || token == '}' || token == '(' || token == ')' || token == ']' || token == ':') return; // tokens are their ASCII
     }
 }
@@ -374,6 +398,8 @@ void match(int tk)
             "Int     "
             "Return  "
             "Sizeof  "
+            "Struct  "
+            "Union   "
             "While   "
             "Comma   "
             "Assign  "
@@ -398,8 +424,10 @@ void match(int tk)
             "Mod     "
             "Inc     "
             "Dec     "
-            "Brak    ";
-        if (tk >= Num && tk <= Brak)
+            "Brak    "
+            "Dot     "
+            "Gmbp    ";
+        if (tk >= Num)
         {
             printf("%d: expected token : %.8s\n", line, &tokens[8 * (tk - Num)]);
         }
@@ -422,7 +450,7 @@ int parse_type()
     int type;
     type = INT; // 默认类型就是INT
     
-    if (token != Int && token != Char && token != Enum)
+    if (token != Int && token != Char && token != Enum && token != Struct && token != Union)
     {
         return -1;
     }
@@ -447,13 +475,77 @@ int parse_type()
         }
         else
         {
-            printf("%d: invalid enum type\n", line);
+            printf("%d: unknown enum type\n", line);
             exit(-1);
         }
     }
-
+    // 自定义 struct
+    else if (token == Struct)
+    {
+        match(Struct);
+        if (token == Id && current_id[Class] == StructType)
+        {
+            type = current_id[Type];
+            match(Id);
+        }
+        else
+        {
+            printf("%d: unknown struct type\n", line);
+            exit(-1);
+        }
+    }
+    // 自定义 union
+    else if (token == Union)
+    {
+        match(Union);
+        if (token == Id && current_id[Class] == UnionType)
+        {
+            type = current_id[Type];
+            match(Id);
+        }
+        else
+        {
+            printf("%d: unknown union type\n", line);
+            exit(-1);
+        }
+    }
     return type;
 }
+
+/*
+获取对类型进行++/--/+/-/[]运算符计算的单元大小，对于指针比较特殊。
+多个运算符都要用，提取出来复用。
+*/
+int get_unit_size(int type)
+{
+    int unit_size;
+    if (type > PTR)
+    {
+        // 一层的struct和union指针++/--时，单元大小是结构体和联合体大小
+        if (type < PTR + PTR && type >= UNION + PTR)
+        {
+            if (type >= STRUCT + PTR) // struct*
+            {
+                unit_size = struct_symbols_list[type - PTR - STRUCT].size;
+            }
+            else // union *
+            {
+                unit_size = union_symbols_list[type - PTR - UNION].size;
+            }
+        }
+        // 多层指针，整型指针
+        else
+        {
+            unit_size = sizeof(int);
+        }
+    }
+    else // 整型、char*指针
+    {
+        unit_size = sizeof(char);
+    }
+    return unit_size;
+}
+
 
 /*
 解析表达式：
@@ -471,6 +563,7 @@ void expression(int level)
     int *id;
     int tmp;
     int *addr;
+    struct us_domain* cur_node;
 
     // 整数字面值
     if (token == Num)
@@ -494,7 +587,7 @@ void expression(int level)
         data = (char*)(((int)data + sizeof(int)) & (-(int)sizeof(int))); // data首地址取int整数倍，同时字符串末尾填充为空位置中的0
         expr_type = CHAR + PTR;
     }
-    // sizeof运算符：一元运算符，仅支持sizeof(int),sizeof(char),sizeof( (int|char){*} )，并且结果类型是int
+    // sizeof运算符：一元运算符，结果是int
     else if (token == Sizeof)
     {
         match(Sizeof);
@@ -515,7 +608,25 @@ void expression(int level)
         match(')');
 
         *++code = IMM;
-        *++code = (expr_type == CHAR) ? sizeof(char) : sizeof(int);
+        if (expr_type == CHAR)
+        {
+            *++code = sizeof(char);
+        }
+        else if (expr_type < PTR && expr_type >= UNION)
+        {
+            if (expr_type >= STRUCT) // struct
+            {
+                *++code = struct_symbols_list[expr_type - STRUCT].size;
+            }
+            else // union
+            {
+                *++code = union_symbols_list[expr_type - UNION].size;
+            }
+        }
+        else // pointer/enum/int
+        {
+            *++code = sizeof(int);
+        }
         expr_type = INT;
     }
     // 变量与函数调用：可能是函数调用、enum值、全局/局部变量
@@ -611,7 +722,7 @@ void expression(int level)
     {
         match('(');
         // 强制类型转换，获取转换类型，并直接修改expr_type中保存的类型
-        if (token == Int || token == Char || token == Enum)
+        if (token == Int || token == Char || token == Enum || token == Struct || token == Union)
         {
             tmp = parse_type();
             if (tmp == -1)
@@ -624,6 +735,13 @@ void expression(int level)
                 match(Mul);
                 tmp = tmp + PTR;
             }
+            //不支持转换为struct/union类型
+            if (tmp < PTR && tmp >= UNION)
+            {
+                printf("%d: do not support struct/union be cast target type, please consider use pointer\n", line);
+                exit(-1);
+            }
+
             match(')');
 
             expression(Inc); // 强制类型转换优先级同++
@@ -750,9 +868,10 @@ void expression(int level)
             printf("%d: invalid lvalue for pre-increment", line);
             exit(-1);
         }
+
         *++code = PUSH;
         *++code = IMM;
-        *++code = (expr_type > PTR) ? sizeof(int) : sizeof(char); // 需要处理是指针的情况
+        *++code = get_unit_size(expr_type); // 需要处理是指针的情况
         *++code = (tmp == Inc) ? ADD : SUB;
         *++code = (expr_type == CHAR) ? SC : SI;
     }
@@ -768,6 +887,12 @@ void expression(int level)
     while (token >= level)
     {
         tmp = expr_type;
+        // struct/union不支持除.,之外的所有运算符，统一检查并报错（->其中会检查，不在这里做）
+        if (expr_type >= UNION && expr_type < PTR && token >= Assign && token <= Brak)
+        {
+            printf("%d: invalid operator for struct/union : %d\n", line, token);
+            exit(-1);
+        }
 
         // 逗号表达式，左结合，优先级最低
         if (token == Comma)
@@ -944,11 +1069,11 @@ void expression(int level)
             *++code = PUSH;
             expression(Mul);
             expr_type = tmp;
-            if (expr_type > PTR) // pointer and not char*
+            if (expr_type > PTR) // pointer but not char*
             {
                 *++code = PUSH;
                 *++code = IMM;
-                *++code = sizeof(int);
+                *++code = get_unit_size(expr_type);
                 *++code = MUL;
             }
             *++code = ADD;
@@ -964,7 +1089,7 @@ void expression(int level)
                 *++code = SUB;
                 *++code = PUSH;
                 *++code = IMM;
-                *++code = sizeof(int);
+                *++code = get_unit_size(expr_type);
                 *++code = DIV;
                 expr_type = INT;
             }
@@ -972,12 +1097,12 @@ void expression(int level)
             {
                 *++code = PUSH;
                 *++code = IMM;
-                *++code = sizeof(int);
+                *++code = get_unit_size(tmp);
                 *++code = MUL;
                 *++code = SUB;
                 expr_type = tmp;
             }
-            else // 整数减法
+            else // 整数减法、char*指针
             {
                 *++code = SUB;
                 expr_type = tmp;
@@ -1029,15 +1154,15 @@ void expression(int level)
                 printf("%d: invlaid value int post ++/--\n", line);
                 exit(-1);
             }
-
+            
             *++code = PUSH;
             *++code = IMM;
-            *++code = (expr_type > PTR) ? sizeof(int) : sizeof(char); // pointer but not char*
+            *++code = get_unit_size(expr_type);
             *++code = (token == Inc) ? ADD : SUB;
             *++code = (expr_type == CHAR) ? SC : SI; // 先保存了++/--的结果
             *++code = PUSH;
             *++code = IMM;
-            *++code = (expr_type > PTR) ? sizeof(int) : sizeof(char);
+            *++code = get_unit_size(expr_type);
             *++code = (token == Inc) ? SUB : ADD; // 再重新恢复原值参与计算
             match(token);
         }
@@ -1052,7 +1177,7 @@ void expression(int level)
             {
                 *++code = PUSH;
                 *++code = IMM;
-                *++code = sizeof(int);
+                *++code = get_unit_size(tmp);
                 *++code = MUL;
             }
             else if (tmp < PTR) // 不是指针
@@ -1062,6 +1187,82 @@ void expression(int level)
             }
             expr_type = tmp - PTR;
             *++code = ADD;
+            *++code = (expr_type == CHAR) ? LC : LI;
+        }
+        // . -> 最高优先级，左结合，一定最先计算，不需要再向后查找更高优先级的表达式了
+        else if (token == Dot || token == Gmbp)
+        {
+            // ->
+            if (token == Gmbp)
+            {
+                // 一层struct/union指针，此时ax中就是->左边的左值的地址，地址是否有效由写程序的人负责，这里也无法检测
+                if (expr_type >= PTR + UNION && expr_type < PTR + PTR)
+                {
+                    expr_type = expr_type - PTR;
+                }
+                else
+                {
+                    printf("%d: invalid variable type for -> operator\n", line);
+                    exit(-1);
+                }
+            }
+            // . 此时需要确保左边一定是左值
+            else
+            {
+                // 确保是左值，则取消加载，还原地址
+                if (*code == LC || *code == LI)
+                {
+                    code--;
+                }
+                else
+                {
+                    printf("%d: invalid lvalue for operator .\n", line);
+                    exit(-1);
+                }
+            }
+            match(token);
+
+            // 非struct/union类型
+            if (expr_type >= PTR || expr_type < UNION)
+            {
+                printf("%d: invalid lvalue for operator .\n", line);
+                exit(-1);
+            }
+            // 结构体/联合体的域
+            if (token != Id)
+            {
+                printf("%d: excepted member name after operator ./->\n", line);
+                exit(-1);
+            }
+            id = current_id;
+            match(Id);
+
+            cur_node = (expr_type >= STRUCT) ? &struct_symbols_list[expr_type - STRUCT] : &union_symbols_list[expr_type - UNION];
+            cur_node = cur_node->next; // 从第一个成员开始
+            for (; cur_node; cur_node = cur_node->next)
+            {
+                if (cur_node->hash == current_id[Hash])
+                {
+                    break;
+                }
+            }
+            // 没有这个成员
+            if (!cur_node)
+            {
+                printf("%d: invalid member name for operator ./->, hash: %d\n", line, current_id[Hash]);
+                exit(-1);
+            }
+
+            // 计算指针偏移，现在ax中保存结构体的地址，struct才需要偏移，union约定所有成员地址都和union本身一致，可以不做，struct第一个成员也可以不做
+            if (expr_type >= STRUCT && cur_node->offset != 0)
+            {
+                *++code = PUSH;
+                *++code = IMM;
+                *++code = cur_node->offset;
+                *++code = ADD;
+            }
+            // 结果也是左值，加载结果
+            expr_type = cur_node->type;
             *++code = (expr_type == CHAR) ? LC : LI;
         }
         else
@@ -1499,6 +1700,13 @@ void function_parameter()
             match(Mul);
         }
 
+        // 不支持struct/union作为函数参数类型
+        if (type < PTR && type >= UNION)
+        {
+            printf("%d: do not support struct/union to be type of function paramter, please use pointer instead\n", line);
+            exit(-1);
+        }
+
         // 参数名称
         if (token != Id)
         {
@@ -1574,6 +1782,20 @@ ADJ count_of_params
 
 函数参数相对于新的bp的偏移: ..., +4, +3, +2
 函数内局部变量相对于bp的偏移: -1, -2, -3, ...
+
+struct/union局部变量的分配：
+int a;
+struct node s;
+int b;
+
+分配内存:
+...             High address        reletive address to bp
+variable a                          -1
+end of struct s                     -2
+...
+begin of struct s                   -(1+sizeof(struct node)/sizeof(int)) <---- address of s
+variable b
+...             Low addresss
 */
 void function_body()
 {
@@ -1582,7 +1804,7 @@ void function_body()
     local_pos = 0;
 
     // 局部变量声明，内置类型或者自定义类型，类型不能省略
-    while (token == Char || token == Int || token == Enum)
+    while (token == Char || token == Int || token == Enum || token == Struct || token == Union)
     {
         // 一定是有效的类型，while已经做了判断
         basetype = parse_type();
@@ -1608,8 +1830,8 @@ void function_body()
             }
             match(Id);
 
-            // 局部变量允许和全局变量、函数、枚举值同名，应该覆盖其定义
-            if (current_id[Class] >= EnumVal && current_id[Class] <= Glo)
+            // 局部变量允许和全局变量、函数、枚举值、自定义类型同名，应该覆盖其定义
+            if (current_id[Class] >= EnumVal && current_id[Class] <= Glo || current_id[Class] >= EnumType && current_id[Class] <= StructType)
             {
                 current_id[GClass] = current_id[Class];
                 current_id[GType] = current_id[Type];
@@ -1617,7 +1839,26 @@ void function_body()
             }
             current_id[Class] = Loc;
             current_id[Type] = type;
-            current_id[Value] = ++local_pos + index_of_bp; // 用index_of_bp减这个值得到相对bp偏移，为了统一局部变量和参数的处理
+
+            // 结构与联合
+            if (type < PTR && type >= UNION)
+            {
+                if (type >= STRUCT) // struct
+                {
+                    local_pos = local_pos + struct_symbols_list[type - STRUCT].size / sizeof(int);
+                    current_id[Value] = local_pos + index_of_bp;
+                }
+                else // union
+                {
+                    local_pos = local_pos + union_symbols_list[type - UNION].size / sizeof(int);
+                    current_id[Value] = local_pos + index_of_bp;
+                }
+            }
+            // 整型与指针
+            else
+            {
+                current_id[Value] = ++local_pos + index_of_bp; // 用index_of_bp减这个值得到相对bp偏移，为了统一局部变量和参数的处理
+            }
 
             if (token != ';')
             {
@@ -1738,19 +1979,186 @@ void enum_body()
     }
 }
 
+
+/*
+处理结构体和联合体的声明列表。
+struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
+union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
+var_decl = type {"*"}, id, {",", {"*"}, id}, ";";
+type = int | char | user_defined_type;
+user_defined_type = (enum | union | struct), id;
+
+struct_or_union: 1 struct 0 union
+
+union的大小取最大，struct大小累加。
+*/
+void struct_union_body(int su_type, int struct_or_union)
+{
+    int domain_type;
+    int domain_size;
+    int cur_offset;
+    int max_size;
+    
+    struct us_domain *cur_us_symbol;    // 当前类型的结构体/联合体信息表中的记录 
+    struct us_domain **next_domain;     // 保存上一个节点的next指针的地址，新建下一个节点时用来连接
+    struct us_domain *cur_node;
+
+    cur_us_symbol = struct_or_union ? &struct_symbols_list[su_type - STRUCT] : &union_symbols_list[su_type - UNION];
+    next_domain = &cur_us_symbol->next;
+    cur_offset = 0;
+    max_size = 0;
+
+    if (token == '}')
+    {
+        printf("%d: struct/union definition can not be empty\n", line);
+        exit(-1);
+    }
+
+    while (token != '}')
+    {
+        // 类型
+        domain_type = parse_type();
+        if (domain_type == -1)
+        {
+            printf("%d: invalid type in struct/union definition\n", line);
+            exit(-1);
+        }
+
+        // 指针
+        while (token == Mul)
+        {
+            match(Mul);
+            domain_type = domain_type + PTR;
+        }
+
+        // 确定域的大小
+        // 整型
+        if (domain_type >= CHAR && domain_type <= ENUM)
+        {
+            domain_size = sizeof(int);
+        }
+        // 指针
+        else if (domain_type >= PTR)
+        {
+            domain_size = sizeof(int);
+        }
+        // 已定义的结构或者联合
+        else
+        {
+            // struct
+            if (domain_type >= STRUCT)
+            {
+                if (struct_symbols_list[domain_type - STRUCT].next == 0)
+                {
+                    printf("%d: incomplete struct type can not be member of struct/union\n", line);
+                    exit(-1);
+                }
+                else
+                {
+                    domain_size = struct_symbols_list[domain_type - STRUCT].size;
+                }
+            }
+            // union
+            else if (domain_type >= UNION)
+            {
+                if (union_symbols_list[domain_type - UNION].next == 0)
+                {
+                    printf("%d: incomplete union type can not be member of struct/union\n", line);
+                    exit(-1);
+                }
+                else
+                {
+                    domain_size = union_symbols_list[domain_type - UNION].size;
+                }
+            }
+            else
+            {
+                printf("%d: invalid type in struct/union definition\n", line);
+                exit(-1);
+            }
+        }
+
+        while (token != ';')
+        {
+            if (token == Id)
+            {
+                // 结构中成员不会和全局作用域中的符号冲突，只需要哈希值即可，不会修改符号表，但需要检测是否在struct或者union内部有命名冲突
+                for (cur_node = cur_us_symbol->next; cur_node; cur_node = cur_node->next)
+                {
+                    // 已经在struct/union中定义了同名变量
+                    if (cur_node->hash == current_id[Hash])
+                    {
+                        printf("%d: struct/union member redefinition\n", line);
+                        exit(-1);
+                    }
+                }
+
+                // 在us_domains_list中新建链表节点，添加到当前节点上
+                for (cur_node = us_domains_list; cur_node->hash; cur_node++);
+                cur_node->hash = current_id[Hash];
+                cur_node->type = domain_type;
+                cur_node->size = domain_size;
+                cur_node->offset = struct_or_union ? cur_offset : 0;
+                cur_node->next = 0;
+
+                // 连接到上一个节点
+                *next_domain = cur_node;
+                next_domain = &cur_node->next;
+
+                match(Id);
+            }
+            else
+            {
+                printf("%d: invalid variable declaration in struct/union definition\n", line);
+                exit(-1);
+            }
+
+            // struct累计偏移，union确定最大的成员
+            cur_offset = cur_offset + domain_size;
+            max_size = max_size > domain_size ? max_size : domain_size;
+
+            if (token != ';')
+            {
+                match(Comma);
+                if (token == ';')
+                {
+                    printf("%d: invalid ',' before ';' in struct/union definition\n", line);
+                    exit(-1);
+                }
+            }
+        }
+        match(';');
+    }
+
+    // 最终struct/union大小
+    if (struct_or_union)
+    {
+        struct_symbols_list[su_type - STRUCT].size = cur_offset;
+    }
+    else
+    {
+        union_symbols_list[su_type - UNION].size = max_size;
+    }
+    // } 留到外面
+}
+
+
 /*
 处理全局的变量定义、类型定义、以及函数定义：
-global_decl = enum_decl | func_decl | var_decl;
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_decl;
 enum_decl = enum, [id], "{", enum_body ,"}";
 func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
 var_decl = type {"*"}, id, {",", {"*"}, id}, ";";
 ret_type = void | type, {"*"};
 type = int | char | user_defined_type;
 user_defined_type = (enum | union | struct), id;
+struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
+union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
+forward_decl = (union | struct), id; (* 目前仅struct和union支持前向声明 *)
 */
 void global_declaration()
 {
-    int type;   // 变量的数据类型
+    int type;       // 变量的数据类型
     int *id;
 
     basetype = INT;
@@ -1773,17 +2181,17 @@ void global_declaration()
                 enum_body();
                 match('}');
             }
+            // 已定义的enum类型
+            else if (id[Class] == EnumType)
+            {
+                basetype = INT;
+                goto define_glo_func;
+            }
             // 已知标识符，但不是enum类型
-            else if (id[Class] != EnumType)
+            else
             {
                 printf("%d: known identifier can not be new enum name in definition\n", line);
                 exit(-1);
-            }
-            // 已定义的enum类型
-            else
-            {
-                basetype = INT;
-                goto define_globals;
             }
         }
         // 匿名enum定义
@@ -1792,6 +2200,168 @@ void global_declaration()
             match('{');
             enum_body();
             match('}');
+        }
+        match(';');
+        return;
+    }
+    // 解析struct定义、前向声明、struct变量定义、struct相关类型作为函数返回类型
+    else if (token == Struct)
+    {
+        match(Struct);
+        if (token == Id)
+        {
+            id = current_id;
+            match(Id);
+
+            // 不识别的新id，那只能是前向声明或者定义，确定类型值，如果是定义就解析定义
+            if (id[Class] == 0)
+            {
+                id[Class] = StructType;
+                id[Type] = cur_struct_type;
+                cur_struct_type++;
+                
+                // 填充结构体信息
+                struct_symbols_list[id[Type] - STRUCT].hash = id[Hash];
+                struct_symbols_list[id[Type] - STRUCT].type = id[Type];
+                struct_symbols_list[id[Type] - STRUCT].size = 0;    // 解析后确定
+                struct_symbols_list[id[Type] - STRUCT].offset = 0;
+                struct_symbols_list[id[Type] - STRUCT].next = 0;    // 解析后确定
+
+                // 新的struct定义
+                if (token == '{')
+                {
+                    match('{');
+                    struct_union_body(id[Type], 1);
+                    match('}');
+                }
+                // 不是前向声明
+                else if (token != ';')
+                {
+                    printf("%d: invalid struct definition or forward declaration\n", line);
+                    exit(-1);
+                }
+                // else ;前向声明
+            }
+            // 已声明的struct类型
+            else if (id[Class] == StructType)
+            {
+                // struct定义
+                if (token == '{')
+                {
+                    // 已经被定义
+                    if (struct_symbols_list[id[Type] - STRUCT].next != 0)
+                    {
+                        printf("%d: duplicate struct definition\n", line);
+                        exit(-1);
+                    }
+                    // 没有定义过那就解析定义
+                    else
+                    {
+                        match('{');
+                        struct_union_body(id[Type], 1);
+                        match('}'); // ;最后会匹配
+                    }
+                }
+                // 不是定义也不是前向声明，那应该就是全局变量或者函数定义
+                else if (token != ';')
+                {
+                    basetype = id[Type];
+                    goto define_glo_func;
+                }
+                // else ;就是前向声明，而且已经声明过了，什么都不用做，不管有没有定义
+            }
+            // 已知标识符，但不是struct类型
+            else
+            {
+                printf("%d: known identifier can not be new struct name in definition\n", line);
+                exit(-1);
+            }
+        }
+        else
+        {
+            printf("%d: invalid use of struct, must with an identifier\n", line);
+            exit(-1);
+        }
+        match(';');
+        return;
+    }
+    // 解析union定义、前向声明、union变量定义、union相关类型作为函数返回类型，和struct基本一模一样
+    else if (token == Union)
+    {
+        match(Union);
+        if (token == Id)
+        {
+            id = current_id;
+            match(Id);
+
+            // 不识别的新id，那只能是前向声明或者定义，确定类型值，如果是定义就解析定义
+            if (id[Class] == 0)
+            {
+                id[Class] = UnionType;
+                id[Type] = cur_union_type;
+                cur_union_type++;
+
+                // 填充结构体信息
+                union_symbols_list[id[Type] - UNION].hash = id[Hash];
+                union_symbols_list[id[Type] - UNION].type = id[Type];
+                union_symbols_list[id[Type] - UNION].size = 0;    // 解析后确定
+                union_symbols_list[id[Type] - UNION].offset = 0;
+                union_symbols_list[id[Type] - UNION].next = 0;    // 解析后确定
+
+                // 新的struct定义
+                if (token == '{')
+                {
+                    match('{');
+                    struct_union_body(id[Type], 0);
+                    match('}');
+                }
+                // 不是前向声明
+                else if (token != ';')
+                {
+                    printf("%d: invalid struct definition or forward declaration\n", line);
+                    exit(-1);
+                }
+                // else ;前向声明
+            }
+            // 已声明的union类型
+            else if (id[Class] == UnionType)
+            {
+                // union定义
+                if (token == '{')
+                {
+                    // 已经被定义
+                    if (union_symbols_list[id[Type] - UNION].next != 0)
+                    {
+                        printf("%d: duplicate union definition\n", line);
+                        exit(-1);
+                    }
+                    // 没有定义过那就解析定义
+                    else
+                    {
+                        match('{');
+                        struct_union_body(id[Type], 0);
+                        match('}'); // ;最后会匹配
+                    }
+                }
+                // 不是定义也不是前向声明，那应该就是全局变量或者函数定义
+                else if (token != ';')
+                {
+                    basetype = id[Type];
+                    goto define_glo_func;
+                }
+                // else ;就是前向声明，而且已经声明过了，什么都不用做，不管有没有定义
+            }
+            // 已知标识符，但不是struct类型
+            else
+            {
+                printf("%d: known identifier can not be new struct name in definition\n", line);
+                exit(-1);
+            }
+        }
+        else
+        {
+            printf("%d: invalid use of struct, must with an identifier\n", line);
+            exit(-1);
         }
         match(';');
         return;
@@ -1808,7 +2378,7 @@ void global_declaration()
         basetype = CHAR;
     }
 
-define_globals:
+define_glo_func:
     // 变量或者函数定义，直到变量结束;，函数结束}
     while (token != ';' && token != '}')
     {
@@ -1837,6 +2407,12 @@ define_globals:
         // 函数定义
         if (token == '(')
         {
+            // 不支持union或者struct作为函数返回值
+            if (type < PTR && type >= UNION)
+            {
+                printf("%d: do not support struct/union to be type of function return value, please use pointer instead\n", line);
+                exit(-1);
+            }
             current_id[Class] = Fun;
             current_id[Value] = (int)(code + 1); // 函数的内存地址
             function_declaration();
@@ -1846,7 +2422,25 @@ define_globals:
         {
             current_id[Class] = Glo;
             current_id[Value] = (int)data;
-            data = data + sizeof(int); // 每种变量
+
+            // 结构与联合
+            if (current_id[Type] < PTR && current_id[Type] >= UNION)
+            {
+                if (current_id[Type] >= STRUCT) // struct
+                {
+                    data = data + struct_symbols_list[current_id[Type] - STRUCT].size;
+                }
+                else // union
+                {
+                    data = data + union_symbols_list[current_id[Type] - UNION].size;
+                }
+            }
+            // 指针或者整型
+            else
+            {
+                data = data + sizeof(int);
+            }
+            
             // 一行定义多个变量
             if (token != ';')
             {
@@ -1868,9 +2462,12 @@ parser入口
 支持的C语言子集（EBNF文法）:
 
 program = {global_decl};
-global_decl = enum_decl | func_decl | var_decl;
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_decl;
 enum_decl = enum, [id], "{", id, ["=", number], {",", id, ["=", number]} ,"}";
 func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
+struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
+union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
+forward_decl = (union | struct), id;
 param_decl = type, {"*"}, id, {",", type {"*"}, id};
 ret_type = void | type, {"*"};
 type = int | char | user_defined_type;
@@ -1897,6 +2494,9 @@ continue_statement = continue, ";";
 */
 void parse()
 {
+    cur_struct_type = STRUCT;
+    cur_union_type = UNION;
+
     next();
     while (token > 0)
     {
@@ -1920,7 +2520,7 @@ int run_vm()
         {
             printf("%d> %.4s", cycle, &"LEA ,IMM ,JMP ,JSR ,JZ  ,JNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PUSH,"
                 "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                "OPEN,READ,CLOS,WRIT,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[(op - LEA) * 5]);
+                "OPEN,READ,CLOS,WRIT,PRTF,MALC,FREE,MSET,MCMP,MCPY,EXIT,"[(op - LEA) * 5]);
             if (op >= JMP && op <= JNZ)
                 printf("0x%.10X\n", *pc);
             else if (op <= ADJ)
@@ -1975,6 +2575,7 @@ int run_vm()
         else if (op == FREE) free((void*)*sp);                     // (addr)
         else if (op == MSET) ax = (int)memset((char*)sp[2], sp[1], *sp);        // (dest, val, size)
         else if (op == MCMP) ax = (int)memcmp((char*)sp[2], (char*)sp[1], *sp); // (dest, val, size)
+        else if (op == MCPY) ax = (int)memcpy((char*)sp[2], (char*)sp[1], *sp); // (dest, src, count)
         else if (op == EXIT) { printf("exit(%d), cycle = %d\n", *sp, cycle); return *sp; }
         else { printf("unkown instruction = %d! cycle = %d\n", op, cycle); return -1; }
     }
@@ -2043,13 +2644,31 @@ int main(int argc, char** argv)
         printf("Could not malloc(%d) for label list for goto of parser\n", 8 * 1024);
         exit(-1);
     }
+    if (!(struct_symbols_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 1024)))
+    {
+        printf("Could not malloc(%d) for struct symbol list of parser\n", sizeof(struct us_domain) * 1024);
+        exit(-1);
+    }
+    if (!(union_symbols_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 1024)))
+    {
+        printf("Could not malloc(%d) for union symbol list of parser\n", sizeof(struct us_domain) * 1024);
+        exit(-1);
+    }
+    if (!(us_domains_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 4096)))
+    {
+        printf("Could not malloc(%d) for union and struct domains symbol info list of parser\n", sizeof(struct us_domain) * 4096);
+        exit(-1);
+    }
     memset(symbols, 0, poolsize);
     memset(break_list, 0, 8 * 1024);
     memset(continue_list, 0, 8 * 1024);
     memset(label_list, 0, 8 * 1024);
+    memset(struct_symbols_list, 0, sizeof(struct us_domain) * 1024);
+    memset(union_symbols_list, 0, sizeof(struct us_domain) * 1024);
+    memset(us_domains_list, 0, sizeof(struct us_domain) * 4096);
 
-    src = (char*)"break char continue do else enum for goto if int return sizeof while "
-        "open read close write printf malloc free memset memcmp exit void main";
+    src = (char*)"break char continue do else enum for goto if int return sizeof struct union while "
+        "open read close write printf malloc free memset memcmp memcpy exit void main";
 
     // 将关键字提前添加到符号表，在词法分析时关键字走标识符的识别流程，由于已经在符号表中，所以直接返回符号表的结果
     tmp = Break;
