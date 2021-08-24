@@ -92,5 +92,6 @@ gcc jatccex.c -o jatccex
 
 - float & double ?
 - x86 JIT compiling ?
+- debugger ?
 
 欢迎任何有意义的改进、扩展、建议与BUG反馈。

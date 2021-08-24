@@ -11,38 +11,65 @@
 #endif
 
 
+// 符号表项：支持struct后用struct替换数组实现。
+struct Symbol_item
+{
+    int token;      // 标记，值应该是Token_type类型的。
+    int hash;       // 根据名称计算出的一个哈希值，加速查找，不需要每次都去遍历名字比较。
+    char *name;     // 名称，计算出哈希值之后就不需要用它了，指向源文件某位置的char*指针。
+    int class;      // 标识符的类型，Id类型的token才需要，值为Identifier_type中枚举。
+    int type;       // 标识符的变量类型或者函数返回值类型，值为Var_type枚举中普通类型与PTR组合得到的值。
+    int value;      // 标识符的值。如果标识符是函数，则是函数地址，如果是变量或者字符串常量就是地址，如果是整数字面量则是具体的值。
+    int gclass, gtype, gvalue;  // 同class,type,value用于全局作用域覆盖局部作用域时存放全局符号。
+};
+
+// break和continue列表项
+struct Bc_list_item
+{
+    int *loop;              // 循环入口地址，仅用于唯一标识一个循环
+    int *bc_address;        // 需要填充的code段指令中的break或者continue跳转地址的地址
+};
+
+// goto列表项
+struct Label_list_item
+{
+    int label_hash;         // 标号的哈希
+    int *goto_address;      // 需要填充的code段指令中标号地址的地址
+};
+
+
 // VM
-char *data;     // 数据段
-int *code,      // 代码段
-    *stack;     // 运行栈
+char *data;         // 数据段
+int *code,          // 代码段
+    *stack;         // 运行栈
 int *pc, *sp, *bp, ax, cycle; // 寄存器
-int poolsize;   // 各个段分配内存大小
+int poolsize;       // 各个段分配内存大小
 
 // tokenizer
-int token;      // 当前token
-int token_val;  // 当前token是常量或字符串字面值时用来记录值
-char *src;      // 源码
-int line;       // 行号
+int token;          // 当前token
+int token_val;      // 当前token是常量或字符串字面值时用来记录值
+char *src;          // 源码
+int line;           // 行号
 int last_token;     // 支持记录和回溯token流的功能
 int last_token_val; // 支持记录和回溯token流的功能
 char* last_src;     // 支持记录和回溯token流的功能
 int last_line;      // 支持记录和回溯token流的功能
 
 // parser
-int *symbols;       // 符号表，动态数组模拟结构体
-int *idmain;        // main函数的符号表记录
-int *current_id;    // 当前正在操作的符号表记录
-int basetype;       // 变量、函数和类型定义的基本类型，是指针类型时使用
-int expr_type;      // 表达式类型
-int index_of_bp;    // 函数调用时第一个参数相对bp的位置，函数的参数数量+1
-int *break_list;    // break语句跳转地址的列表
-int *continue_list; // continue语句跳转地址列表
-int *cur_loop;      // 保存当前正在解析的循环的地址，用来唯一标识一个循环
-int *label_list;    // goto语句跳转地址列表
+struct Symbol_item *symbols;        // 符号表
+struct Symbol_item *idmain;         // main函数的符号表记录
+struct Symbol_item *current_id;     // 当前标识符的符号表记录
+int basetype;                       // 变量、函数和类型定义的基本类型，是指针类型时使用
+int expr_type;                      // 表达式类型
+int index_of_bp;                    // 函数调用时第一个参数相对bp的位置，函数的参数数量+1
+struct Bc_list_item *break_list;    // break语句跳转地址的列表
+struct Bc_list_item *continue_list; // continue语句跳转地址列表
+int *cur_loop;                      // 保存当前正在解析的循环的地址，用来唯一标识一个循环，for break & continue
+struct Label_list_item *label_list; // goto语句跳转地址列表
 
 // debug
-int debug;          // 调试模式
-int *last_code;     // 上一次打印至的code段指针
+int debug;                  // 调试模式
+int *last_code;             // 上一次打印至的code段指针
 
 // union or struct domain
 struct us_domain
@@ -127,27 +154,6 @@ enum Identifier_type
     Label           // label of goto
 };
 
-/*
-符号表号中的记录用struct表示，在不支持struct特性的情况下，用整型动态数组来模拟一个struct，用枚举表示下标来取成员。
-符号表记录各个域含义：
-Token:  标记，值应该是Token_type类型的。
-Hash:   根据名称计算出的一个哈希值，加速查找，不需要每次都去遍历名字比较。
-Name:   名称，计算出哈希值之后就不需要用它了，指向源文件某位置的char*指针。
-Class:  标识符的类型，Id类型才需要，值为Identifier_type中枚举。
-Type:   标识符的变量类型或者函数返回值类型，值为Var_type枚举中普通类型与PTR组合得到的值。
-Value:  标识符的值。如果标识符是函数，则是函数地址，如果是变量或者字符串常量就是地址，如果是字面量则是具体的值。
-GClass/GType/GVlaue: 同Class/Type/Value，处理全局作用域对函数作用域的覆盖。
-IdSize: struct长度。
-*/
-enum Symbol_domain { Token = 0, Hash, Name, Class, Type, Value, GClass, GType, GValue, IdSize };
-
-
-// break和continue列表的域，同样模拟结构体
-enum Break_continue_list_domain { Loop = 0, BCAddress, BCListSize };
-
-// goto跳转列表的域，第一个是标号的哈希，第二个是地址
-enum Goto_list_domain { LabelHash = 0, JmpCodeAddress, GotoListSize };
-
 // 指令操作码，最多一个操作数
 enum Instruction
 {
@@ -211,20 +217,20 @@ void next()
             }
             // 查找已有标识符
             current_id = symbols;
-            while (current_id[Token])
+            while (current_id->token)
             {
-                if (current_id[Hash] == hash && !memcmp((char*)current_id[Name], last_pos, src - last_pos))
+                if (current_id->hash == hash && !memcmp(current_id->name, last_pos, src - last_pos))
                 {
                     // 找到了为已有的标识符
-                    token = current_id[Token];
+                    token = current_id->token;
                     return;
                 }
-                current_id = current_id + IdSize;
+                current_id++;
             }
             // 在符号表中保存新的标识符
-            token = current_id[Token] = Id;
-            current_id[Hash] = hash;
-            current_id[Name] = (int)last_pos;
+            token = current_id->token = Id;
+            current_id->hash = hash;
+            current_id->name = last_pos;
             return;
         }
         // 整数字面值，三种类型：0123八进制，123十进制，0x123十六进制
@@ -468,7 +474,7 @@ int parse_type()
     else if (token == Enum)
     {
         match(Enum);
-        if (token == Id && current_id[Class] == EnumType)
+        if (token == Id && current_id->class == EnumType)
         {
             type = INT; // 视为int
             match(Id);
@@ -483,9 +489,9 @@ int parse_type()
     else if (token == Struct)
     {
         match(Struct);
-        if (token == Id && current_id[Class] == StructType)
+        if (token == Id && current_id->class == StructType)
         {
-            type = current_id[Type];
+            type = current_id->type;
             match(Id);
         }
         else
@@ -498,9 +504,9 @@ int parse_type()
     else if (token == Union)
     {
         match(Union);
-        if (token == Id && current_id[Class] == UnionType)
+        if (token == Id && current_id->class == UnionType)
         {
-            type = current_id[Type];
+            type = current_id->type;
             match(Id);
         }
         else
@@ -560,7 +566,7 @@ int get_unit_size(int type)
 */
 void expression(int level)
 {
-    int *id;
+    struct Symbol_item *id;
     int tmp;
     int *addr;
     struct us_domain* cur_node;
@@ -660,15 +666,15 @@ void expression(int level)
             match(')');
 
             // 系统调用
-            if (id[Class] == Sys)
+            if (id->class == Sys)
             {
-                *++code = id[Value];
+                *++code = id->value;
             }
             // 自定义函数调用
-            else if (id[Class] == Fun)
+            else if (id->class == Fun)
             {
                 *++code = JSR;
-                *++code = id[Value];
+                *++code = id->value;
             }
             else
             {
@@ -682,29 +688,29 @@ void expression(int level)
                 *++code = ADJ;
                 *++code = tmp;
             }
-            expr_type = id[Type]; // 返回值类型
+            expr_type = id->type; // 返回值类型
         }
         // 枚举值
-        else if (id[Class] == EnumVal)
+        else if (id->class == EnumVal)
         {
             *++code = IMM;
-            *++code = id[Value];
+            *++code = id->value;
             expr_type = INT;
         }
         // 全局或局部变量
         else
         {
             // 函数内定义的局部变量或者函数参数，加载与bp的相对地址
-            if (id[Class] == Loc)
+            if (id->class == Loc)
             {
                 *++code = LEA;
-                *++code = index_of_bp - id[Value];
+                *++code = index_of_bp - id->value;
             }
             // 全局变量则加载绝对地址
-            else if (id[Class] == Glo)
+            else if (id->class == Glo)
             {
                 *++code = IMM;
-                *++code = id[Value];
+                *++code = id->value;
             }
             else
             {
@@ -713,7 +719,7 @@ void expression(int level)
             }
 
             // 加载变量值到ax，地址已经由上面LEA或者IMM加载到了ax中
-            expr_type = id[Type];
+            expr_type = id->type;
             *++code = (expr_type == CHAR) ? LC : LI;
         }
     }
@@ -1241,7 +1247,7 @@ void expression(int level)
             cur_node = cur_node->next; // 从第一个成员开始
             for (; cur_node; cur_node = cur_node->next)
             {
-                if (cur_node->hash == current_id[Hash])
+                if (cur_node->hash == current_id->hash)
                 {
                     break;
                 }
@@ -1249,7 +1255,7 @@ void expression(int level)
             // 没有这个成员
             if (!cur_node)
             {
-                printf("%d: invalid member name for operator ./->, hash: %d\n", line, current_id[Hash]);
+                printf("%d: invalid member name for operator ./->, hash: %d\n", line, current_id->hash);
                 exit(-1);
             }
 
@@ -1365,13 +1371,15 @@ JMP [entry]
 void statement()
 {
     int *a, *b, *c, *end; // 记录保存跳转地址的code段地址，后续确定后填充
-    int *list_pos;
+    struct Symbol_item *id;
+    struct Bc_list_item *bclist_pos;
+    struct Label_list_item *label_list_pos;
     int *tmp_loop;  // 考虑循环嵌套，暂存当前循环，以便结束内层循环后恢复cur_loop，为了实现break和continue
-    int *id;
+    
 
     a = b = c = end = 0;
     tmp_loop = 0;
-    list_pos = 0;
+    bclist_pos = 0;
 
     // 暂存当前循环，进入内层循环时会直接覆盖cur_loop
     tmp_loop = cur_loop;
@@ -1419,22 +1427,22 @@ void statement()
         *end = (int)(code + 1);
 
         // 处理break和continue列表中的跳转地址
-        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCListSize)
+        for (bclist_pos = break_list; bclist_pos->loop; bclist_pos++)
         {
-            if (list_pos[Loop] == (int)cur_loop)
+            if (bclist_pos->loop == cur_loop)
             {
-                *(int*)list_pos[BCAddress] = (int)(code + 1);
-                list_pos[Loop] = 0;
-                list_pos[BCAddress] = 0;
+                *(int*)bclist_pos->bc_address = (int)(code + 1);
+                bclist_pos->loop = 0;
+                bclist_pos->bc_address = 0;
             }
         }
-        for (list_pos = continue_list; *list_pos; list_pos++)
+        for (bclist_pos = continue_list; bclist_pos->loop; bclist_pos++)
         {
-            if (list_pos[Loop] == (int)cur_loop)
+            if (bclist_pos->loop == cur_loop)
             {
-                *(int*)list_pos[BCAddress] = (int)a;
-                list_pos[Loop] = 0;
-                list_pos[BCAddress] = 0;
+                *(int*)bclist_pos->bc_address = (int)a;
+                bclist_pos->loop = 0;
+                bclist_pos->bc_address = 0;
             }
         }
     }
@@ -1487,22 +1495,22 @@ void statement()
         *end = (int)(code + 1);
 
         // 处理break和continue列表中的跳转地址
-        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCListSize)
+        for (bclist_pos = break_list; bclist_pos->loop; bclist_pos++)
         {
-            if (list_pos[Loop] == (int)cur_loop)
+            if (bclist_pos->loop == cur_loop)
             {
-                *(int*)list_pos[BCAddress] = (int)(code + 1);
-                list_pos[Loop] = 0;
-                list_pos[BCAddress] = 0;
+                *(int*)bclist_pos->bc_address = (int)(code + 1);
+                bclist_pos->loop = 0;
+                bclist_pos->bc_address = 0;
             }
         }
-        for (list_pos = continue_list; *list_pos; list_pos = list_pos + BCListSize)
+        for (bclist_pos = continue_list; bclist_pos->loop; bclist_pos++)
         {
-            if (list_pos[Loop] == (int)cur_loop)
+            if (bclist_pos->loop == cur_loop)
             {
-                *(int*)list_pos[BCAddress] = (int)b; // continue will goto iter statement
-                list_pos[Loop] = 0;
-                list_pos[BCAddress] = 0;
+                *(int*)bclist_pos->bc_address = (int)b; // continue will goto iter statement
+                bclist_pos->loop = 0;
+                bclist_pos->bc_address = 0;
             }
         }
     }
@@ -1523,22 +1531,22 @@ void statement()
         *++code = (int)a;
 
         // 处理break和continue列表中的跳转地址
-        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCListSize)
+        for (bclist_pos = break_list; bclist_pos->loop; bclist_pos++)
         {
-            if (list_pos[Loop] == (int)cur_loop)
+            if (bclist_pos->loop == cur_loop)
             {
-                *(int*)list_pos[BCAddress] = (int)(code + 1);
-                list_pos[Loop] = 0;
-                list_pos[BCAddress] = 0;
+                *(int*)bclist_pos->bc_address = (int)(code + 1);
+                bclist_pos->loop = 0;
+                bclist_pos->bc_address = 0;
             }
         }
-        for (list_pos = continue_list; *list_pos; list_pos = list_pos + BCListSize)
+        for (bclist_pos = continue_list; bclist_pos->loop; bclist_pos++)
         {
-            if (list_pos[Loop] == (int)cur_loop)
+            if (bclist_pos->loop == cur_loop)
             {
-                *(int*)list_pos[BCAddress] = (int)b; // continue will goto condition
-                list_pos[Loop] = 0;
-                list_pos[BCAddress] = 0;
+                *(int*)bclist_pos->bc_address = (int)b; // continue will goto condition
+                bclist_pos->loop = 0;
+                bclist_pos->bc_address = 0;
             }
         }
     }
@@ -1556,9 +1564,9 @@ void statement()
         
         *++code = JMP;
         // 添加当前需要填充的地址到break列表末尾
-        for (list_pos = break_list; *list_pos; list_pos = list_pos + BCAddress) ;
-        list_pos[Loop] = (int)cur_loop;
-        list_pos[BCAddress] = (int)++code;
+        for (bclist_pos = break_list; bclist_pos->loop; bclist_pos++) ;
+        bclist_pos->loop = cur_loop;
+        bclist_pos->bc_address = ++code;
     }
     // continue, ";"
     else if (token == Continue)
@@ -1574,9 +1582,9 @@ void statement()
         
         *++code = JMP;
         // 添加当前需要填充的地址到continue列表末尾
-        for (list_pos = continue_list; *list_pos; list_pos = list_pos + BCAddress) ;
-        list_pos[Loop] = (int)cur_loop;
-        list_pos[BCAddress] = (int)++code;
+        for (bclist_pos = continue_list; bclist_pos->loop; bclist_pos++) ;
+        bclist_pos->loop = cur_loop;
+        bclist_pos->bc_address = ++code;
     }
     // "{", {statement}, "}"
     else if (token == '{')
@@ -1612,9 +1620,9 @@ void statement()
         
         *++code = JMP;
         // 添加当前需要填充的地址到label列表末尾
-        for (list_pos = label_list; *list_pos; list_pos = list_pos + GotoListSize) ;
-        list_pos[LabelHash] = current_id[Hash];
-        list_pos[JmpCodeAddress] = (int)++code;
+        for (label_list_pos = label_list; label_list_pos->label_hash; label_list_pos++) ;
+        label_list_pos->label_hash = current_id->hash;
+        label_list_pos->goto_address = ++code;
 
         match(';');
     }
@@ -1636,20 +1644,20 @@ void statement()
 
                 // 标准C语言标号和变量、函数名是互不冲突的，但这里需要位置来保存，
                 // 出于实现方便和代码清晰考虑，直接限制标号不能和类型、函数、变量、系统调用、枚举值同名。
-                if (id[Class] >= EnumVal && id[Class] < Label)
+                if (id->class >= EnumVal && id->class < Label)
                 {
                     printf("%d: label can not have a same name with types, global vars, local vars, functions, system calls, and enum values\n", line);
                     exit(-1);
                 }
-                else if (id[Class] == Label)
+                else if (id->class == Label)
                 {
                     printf("%d: labels can not have same name\n", line);
                     exit(-1);
                 }
 
                 // 定义一个新的标号
-                id[Class] = Label;
-                id[Value] = (int)(code + 1);
+                id->class = Label;
+                id->value = (int)(code + 1);
 
                 // 标号后必须有语句，位于块末尾的必须加一个空语句;
                 if (token == '}')
@@ -1714,23 +1722,23 @@ void function_parameter()
             exit(-1);
         }
         // 已经定义同名局部变量
-        else if (current_id[Class] == Loc)
+        else if (current_id->class == Loc)
         {
             printf("%d: duplicate parameter declaration\n", line);
             exit(-1);
         }
         match(Id);
 
-        // 有同名全局变量的话先保存同名全局变量，再在函数内覆盖局部变量定义
-        if (current_id[Class] == Glo)
+        // 函数参数同局部变量允许和全局变量、函数、枚举值、自定义类型同名，应该覆盖其定义
+        if (current_id->class >= EnumVal && current_id->class <= Glo || current_id->class >= EnumType && current_id->class <= StructType)
         {
-            current_id[GClass] = current_id[Class];
-            current_id[GType] = current_id[Type];
-            current_id[GValue] = current_id[Value];
+            current_id->gclass = current_id->class;
+            current_id->gtype = current_id->type;
+            current_id->gvalue = current_id->value;
         }
-        current_id[Class] = Loc;
-        current_id[Type] = type;
-        current_id[Value] = params++; // 参数的下标，从0开始，最后用index_of_bp减去这个值得到相对bp偏移，为了统一局部变量和参数的处理
+        current_id->class = Loc;
+        current_id->type = type;
+        current_id->value = params++; // 参数的下标，从0开始，最后用index_of_bp减去这个值得到相对bp偏移，为了统一局部变量和参数的处理
 
         if (token != ')')
         {
@@ -1823,7 +1831,7 @@ void function_body()
                 printf("%d: invalid local declaration\n", line);
                 exit(-1);
             }
-            if (current_id[Class] == Loc)
+            if (current_id->class == Loc)
             {
                 printf("%d: duplicate local declaration\n", line);
                 exit(-1);
@@ -1831,14 +1839,14 @@ void function_body()
             match(Id);
 
             // 局部变量允许和全局变量、函数、枚举值、自定义类型同名，应该覆盖其定义
-            if (current_id[Class] >= EnumVal && current_id[Class] <= Glo || current_id[Class] >= EnumType && current_id[Class] <= StructType)
+            if (current_id->class >= EnumVal && current_id->class <= Glo || current_id->class >= EnumType && current_id->class <= StructType)
             {
-                current_id[GClass] = current_id[Class];
-                current_id[GType] = current_id[Type];
-                current_id[GValue] = current_id[Value];
+                current_id->gclass = current_id->class;
+                current_id->gtype = current_id->type;
+                current_id->gvalue = current_id->value;
             }
-            current_id[Class] = Loc;
-            current_id[Type] = type;
+            current_id->class = Loc;
+            current_id->type = type;
 
             // 结构与联合
             if (type < PTR && type >= UNION)
@@ -1846,18 +1854,18 @@ void function_body()
                 if (type >= STRUCT) // struct
                 {
                     local_pos = local_pos + struct_symbols_list[type - STRUCT].size / sizeof(int);
-                    current_id[Value] = local_pos + index_of_bp;
+                    current_id->value = local_pos + index_of_bp;
                 }
                 else // union
                 {
                     local_pos = local_pos + union_symbols_list[type - UNION].size / sizeof(int);
-                    current_id[Value] = local_pos + index_of_bp;
+                    current_id->value = local_pos + index_of_bp;
                 }
             }
             // 整型与指针
             else
             {
-                current_id[Value] = ++local_pos + index_of_bp; // 用index_of_bp减这个值得到相对bp偏移，为了统一局部变量和参数的处理
+                current_id->value = ++local_pos + index_of_bp; // 用index_of_bp减这个值得到相对bp偏移，为了统一局部变量和参数的处理
             }
 
             if (token != ';')
@@ -1893,7 +1901,7 @@ func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
 */
 void function_declaration()
 {
-    int* list_pos;
+    struct Label_list_item *label_list_pos;
     int find_label;
 
     cur_loop = 0;
@@ -1906,36 +1914,39 @@ void function_declaration()
     //match('}'); // 不消耗}，留到global_declaration中用于标识函数解析过程的结束
 
     // 填充goto的标号地址
-    for (list_pos = label_list; *list_pos; list_pos = list_pos + GotoListSize)
+    for (label_list_pos = label_list; label_list_pos->label_hash; label_list_pos++)
     {
         find_label = 0;
-        for (current_id = symbols; current_id[Token]; current_id = current_id + IdSize)
+        for (current_id = symbols; current_id->token; current_id++)
         {
-            if (current_id[Token] == Id && current_id[Class] == Label && current_id[Hash] == list_pos[LabelHash] && current_id[Value])
+            if (current_id->token == Id && current_id->class == Label && current_id->hash == label_list_pos->label_hash && current_id->value)
             {
-                *(int*)list_pos[JmpCodeAddress] = current_id[Value];
+                *(int*)label_list_pos->goto_address = current_id->value;
                 find_label = 1;
+                break;
             }
         }
         if (!find_label)
         {
-            printf("%d: invalid label for goto in function, hash: %d\n", line, list_pos[LabelHash]);
+            printf("%d: invalid label for goto in function, hash: %d\n", line, label_list_pos->label_hash);
             exit(-1);
         }
-        list_pos[LabelHash] = list_pos[JmpCodeAddress] = 0;
+        // 填充完后依次清空goto列表
+        label_list_pos->label_hash = 0;
+        label_list_pos->goto_address = 0;
     }
 
     // 遍历符号表，恢复全局变量定义，如果没有同名全局变量，则删除后符号表中还有该项，但是Class/Type/Value都会被置空
     current_id = symbols;
-    while (current_id[Token])
+    while (current_id->token)
     {
-        if (current_id[Class] == Loc || current_id[Class] == Label)  // 同时清空标号定义
+        if (current_id->class == Loc || current_id->class == Label)  // 同时清空标号定义
         {
-            current_id[Class] = current_id[GClass];
-            current_id[Type] = current_id[GType];
-            current_id[Value] = current_id[GValue];
+            current_id->class = current_id->gclass;
+            current_id->type = current_id->gtype;
+            current_id->value = current_id->gvalue;
         }
-        current_id = current_id + IdSize;
+        current_id++;
     }
 }
 
@@ -1968,9 +1979,9 @@ void enum_body()
         }
 
         // 给枚举赋值，视为常量
-        current_id[Class] = EnumVal;
-        current_id[Type] = INT;
-        current_id[Value] = enum_val++;
+        current_id->class = EnumVal;
+        current_id->type = INT;
+        current_id->value = enum_val++;
 
         if (token != '}')
         {
@@ -2086,7 +2097,7 @@ void struct_union_body(int su_type, int struct_or_union)
                 for (cur_node = cur_us_symbol->next; cur_node; cur_node = cur_node->next)
                 {
                     // 已经在struct/union中定义了同名变量
-                    if (cur_node->hash == current_id[Hash])
+                    if (cur_node->hash == current_id->hash)
                     {
                         printf("%d: struct/union member redefinition\n", line);
                         exit(-1);
@@ -2095,7 +2106,7 @@ void struct_union_body(int su_type, int struct_or_union)
 
                 // 在us_domains_list中新建链表节点，添加到当前节点上
                 for (cur_node = us_domains_list; cur_node->hash; cur_node++);
-                cur_node->hash = current_id[Hash];
+                cur_node->hash = current_id->hash;
                 cur_node->type = domain_type;
                 cur_node->size = domain_size;
                 cur_node->offset = struct_or_union ? cur_offset : 0;
@@ -2159,7 +2170,7 @@ forward_decl = (union | struct), id; (* 目前仅struct和union支持前向声�
 void global_declaration()
 {
     int type;       // 变量的数据类型
-    int *id;
+    struct Symbol_item *id;
 
     basetype = INT;
 
@@ -2173,16 +2184,16 @@ void global_declaration()
             id = current_id;
             match(Id);
             // 不识别的新id，那只能是类型定义
-            if (id[Class] == 0)
+            if (id->class == 0)
             {
-                id[Class] = EnumType;
-                id[Type] = Enum;        // 这个域意义不大，这里不区分枚举类型，都解释为int
+                id->class = EnumType;
+                id->type = Enum;        // 这个域意义不大，这里不区分枚举类型，都解释为int
                 match('{');
                 enum_body();
                 match('}');
             }
             // 已定义的enum类型
-            else if (id[Class] == EnumType)
+            else if (id->class == EnumType)
             {
                 basetype = INT;
                 goto define_glo_func;
@@ -2214,24 +2225,24 @@ void global_declaration()
             match(Id);
 
             // 不识别的新id，那只能是前向声明或者定义，确定类型值，如果是定义就解析定义
-            if (id[Class] == 0)
+            if (id->class == 0)
             {
-                id[Class] = StructType;
-                id[Type] = cur_struct_type;
+                id->class = StructType;
+                id->type = cur_struct_type;
                 cur_struct_type++;
                 
                 // 填充结构体信息
-                struct_symbols_list[id[Type] - STRUCT].hash = id[Hash];
-                struct_symbols_list[id[Type] - STRUCT].type = id[Type];
-                struct_symbols_list[id[Type] - STRUCT].size = 0;    // 解析后确定
-                struct_symbols_list[id[Type] - STRUCT].offset = 0;
-                struct_symbols_list[id[Type] - STRUCT].next = 0;    // 解析后确定
+                struct_symbols_list[id->type - STRUCT].hash = id->hash;
+                struct_symbols_list[id->type - STRUCT].type = id->type;
+                struct_symbols_list[id->type - STRUCT].size = 0;    // 解析后确定
+                struct_symbols_list[id->type - STRUCT].offset = 0;
+                struct_symbols_list[id->type - STRUCT].next = 0;    // 解析后确定
 
                 // 新的struct定义
                 if (token == '{')
                 {
                     match('{');
-                    struct_union_body(id[Type], 1);
+                    struct_union_body(id->type, 1);
                     match('}');
                 }
                 // 不是前向声明
@@ -2243,13 +2254,13 @@ void global_declaration()
                 // else ;前向声明
             }
             // 已声明的struct类型
-            else if (id[Class] == StructType)
+            else if (id->class == StructType)
             {
                 // struct定义
                 if (token == '{')
                 {
                     // 已经被定义
-                    if (struct_symbols_list[id[Type] - STRUCT].next != 0)
+                    if (struct_symbols_list[id->type - STRUCT].next != 0)
                     {
                         printf("%d: duplicate struct definition\n", line);
                         exit(-1);
@@ -2258,14 +2269,14 @@ void global_declaration()
                     else
                     {
                         match('{');
-                        struct_union_body(id[Type], 1);
+                        struct_union_body(id->type, 1);
                         match('}'); // ;最后会匹配
                     }
                 }
                 // 不是定义也不是前向声明，那应该就是全局变量或者函数定义
                 else if (token != ';')
                 {
-                    basetype = id[Type];
+                    basetype = id->type;
                     goto define_glo_func;
                 }
                 // else ;就是前向声明，而且已经声明过了，什么都不用做，不管有没有定义
@@ -2295,24 +2306,24 @@ void global_declaration()
             match(Id);
 
             // 不识别的新id，那只能是前向声明或者定义，确定类型值，如果是定义就解析定义
-            if (id[Class] == 0)
+            if (id->class == 0)
             {
-                id[Class] = UnionType;
-                id[Type] = cur_union_type;
+                id->class = UnionType;
+                id->type = cur_union_type;
                 cur_union_type++;
 
                 // 填充结构体信息
-                union_symbols_list[id[Type] - UNION].hash = id[Hash];
-                union_symbols_list[id[Type] - UNION].type = id[Type];
-                union_symbols_list[id[Type] - UNION].size = 0;    // 解析后确定
-                union_symbols_list[id[Type] - UNION].offset = 0;
-                union_symbols_list[id[Type] - UNION].next = 0;    // 解析后确定
+                union_symbols_list[id->type - UNION].hash = id->hash;
+                union_symbols_list[id->type - UNION].type = id->type;
+                union_symbols_list[id->type - UNION].size = 0;    // 解析后确定
+                union_symbols_list[id->type - UNION].offset = 0;
+                union_symbols_list[id->type - UNION].next = 0;    // 解析后确定
 
                 // 新的struct定义
                 if (token == '{')
                 {
                     match('{');
-                    struct_union_body(id[Type], 0);
+                    struct_union_body(id->type, 0);
                     match('}');
                 }
                 // 不是前向声明
@@ -2324,13 +2335,13 @@ void global_declaration()
                 // else ;前向声明
             }
             // 已声明的union类型
-            else if (id[Class] == UnionType)
+            else if (id->class == UnionType)
             {
                 // union定义
                 if (token == '{')
                 {
                     // 已经被定义
-                    if (union_symbols_list[id[Type] - UNION].next != 0)
+                    if (union_symbols_list[id->type - UNION].next != 0)
                     {
                         printf("%d: duplicate union definition\n", line);
                         exit(-1);
@@ -2339,14 +2350,14 @@ void global_declaration()
                     else
                     {
                         match('{');
-                        struct_union_body(id[Type], 0);
+                        struct_union_body(id->type, 0);
                         match('}'); // ;最后会匹配
                     }
                 }
                 // 不是定义也不是前向声明，那应该就是全局变量或者函数定义
                 else if (token != ';')
                 {
-                    basetype = id[Type];
+                    basetype = id->type;
                     goto define_glo_func;
                 }
                 // else ;就是前向声明，而且已经声明过了，什么都不用做，不管有没有定义
@@ -2396,13 +2407,13 @@ define_glo_func:
             exit(-1);
         }
         // 这个标识符已经有了类型，重复的定义
-        if (current_id[Class])
+        if (current_id->class)
         {
             printf("%d: duplicate golbal declaration\n", line);
             exit(-1);
         }
         match(Id);
-        current_id[Type] = type;
+        current_id->type = type;
 
         // 函数定义
         if (token == '(')
@@ -2413,26 +2424,26 @@ define_glo_func:
                 printf("%d: do not support struct/union to be type of function return value, please use pointer instead\n", line);
                 exit(-1);
             }
-            current_id[Class] = Fun;
-            current_id[Value] = (int)(code + 1); // 函数的内存地址
+            current_id->class = Fun;
+            current_id->value = (int)(code + 1); // 函数的内存地址
             function_declaration();
         }
         // 全局变量定义，在data区分配内存
         else
         {
-            current_id[Class] = Glo;
-            current_id[Value] = (int)data;
+            current_id->class = Glo;
+            current_id->value = (int)data;
 
             // 结构与联合
-            if (current_id[Type] < PTR && current_id[Type] >= UNION)
+            if (current_id->type < PTR && current_id->type >= UNION)
             {
-                if (current_id[Type] >= STRUCT) // struct
+                if (current_id->type >= STRUCT) // struct
                 {
-                    data = data + struct_symbols_list[current_id[Type] - STRUCT].size;
+                    data = data + struct_symbols_list[current_id->type - STRUCT].size;
                 }
                 else // union
                 {
-                    data = data + union_symbols_list[current_id[Type] - UNION].size;
+                    data = data + union_symbols_list[current_id->type - UNION].size;
                 }
             }
             // 指针或者整型
@@ -2624,45 +2635,45 @@ int main(int argc, char** argv)
     memset(stack, 0, poolsize);
     
     // 为parser分配内存
-    if (!(symbols = (int*)malloc(poolsize)))
+    if (!(symbols = (struct Symbol_item*)malloc(poolsize)))
     {
         printf("Could not malloc(%d) for symbol table\n", poolsize);
         return -1;
     }
-    if (!(break_list = (int*)malloc(8 * 1024))) // 8KB
+    if (!(break_list = (struct Bc_list_item*)malloc(sizeof(struct Bc_list_item) * 1024))) // 1024 unit
     {
         printf("Could not malloc(%d) for break list of parser\n", 8 * 1024);
         exit(-1);
     }
-    if (!(continue_list = (int*)malloc(8 * 1024))) // 8KB
+    if (!(continue_list = (struct Bc_list_item*)malloc(sizeof(struct Bc_list_item) * 1024))) // 1024 unit
     {
-        printf("Could not malloc(%d) for continue list of parser\n", 8 * 1024);
+        printf("Could not malloc(%d) for continue list of parser\n", sizeof(struct Bc_list_item) * 1024);
         exit(-1);
     }
-    if (!(label_list = (int*)malloc(8 * 1024))) // 8KB
+    if (!(label_list = (struct Label_list_item*)malloc(sizeof(struct Label_list_item) * 1024))) // 1024 unit
     {
         printf("Could not malloc(%d) for label list for goto of parser\n", 8 * 1024);
         exit(-1);
     }
-    if (!(struct_symbols_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 1024)))
+    if (!(struct_symbols_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 1024))) // 1024 unit
     {
         printf("Could not malloc(%d) for struct symbol list of parser\n", sizeof(struct us_domain) * 1024);
         exit(-1);
     }
-    if (!(union_symbols_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 1024)))
+    if (!(union_symbols_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 1024))) // 1024 unit
     {
         printf("Could not malloc(%d) for union symbol list of parser\n", sizeof(struct us_domain) * 1024);
         exit(-1);
     }
-    if (!(us_domains_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 4096)))
+    if (!(us_domains_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 4096))) // 4096 unit
     {
         printf("Could not malloc(%d) for union and struct domains symbol info list of parser\n", sizeof(struct us_domain) * 4096);
         exit(-1);
     }
     memset(symbols, 0, poolsize);
-    memset(break_list, 0, 8 * 1024);
-    memset(continue_list, 0, 8 * 1024);
-    memset(label_list, 0, 8 * 1024);
+    memset(break_list, 0, sizeof(struct Bc_list_item) * 1024);
+    memset(continue_list, 0, sizeof(struct Bc_list_item) * 1024);
+    memset(label_list, 0, sizeof(struct Label_list_item) * 1024);
     memset(struct_symbols_list, 0, sizeof(struct us_domain) * 1024);
     memset(union_symbols_list, 0, sizeof(struct us_domain) * 1024);
     memset(us_domains_list, 0, sizeof(struct us_domain) * 4096);
@@ -2675,7 +2686,7 @@ int main(int argc, char** argv)
     while (tmp <= While)
     {
         next();
-        current_id[Token] = tmp++; // only need token
+        current_id->token = tmp++; // only need token
     }
 
     // 将库函数添加到符号表中，和关键字含义类似
@@ -2683,13 +2694,13 @@ int main(int argc, char** argv)
     while (tmp <= EXIT)
     {
         next();
-        current_id[Class] = Sys;   // 标识符类型是系统调用
-        current_id[Type] = INT;    // 返回值类型
-        current_id[Value] = tmp++; // 指令
+        current_id->class = Sys;   // 标识符类型是系统调用
+        current_id->type = INT;    // 返回值类型
+        current_id->value = tmp++; // 指令
     }
     // void将被视为char处理，main被作为标识符添加到符号表，并使用idmain记录main函数的符号表项
     next();
-    current_id[Token] = Char; // void type, regard void as char
+    current_id->token = Char; // void type, regard void as char
     next();
     idmain = current_id; // keep track on main
 
@@ -2720,7 +2731,7 @@ int main(int argc, char** argv)
     parse();
 
     // 从main开始执行
-    if (!(pc = (int*)idmain[Value]))
+    if (!(pc = (int*)idmain->value))
     {
         printf("main() not defined\n");
         return -1;
