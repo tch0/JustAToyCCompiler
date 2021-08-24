@@ -20,6 +20,8 @@
     - [类型解析实现](#%E7%B1%BB%E5%9E%8B%E8%A7%A3%E6%9E%90%E5%AE%9E%E7%8E%B0)
     - [类型支持](#%E7%B1%BB%E5%9E%8B%E6%94%AF%E6%8C%81)
     - [运算符支持](#%E8%BF%90%E7%AE%97%E7%AC%A6%E6%94%AF%E6%8C%81)
+  - [使用struct重构](#%E4%BD%BF%E7%94%A8struct%E9%87%8D%E6%9E%84)
+  - [函数前向声明](#%E5%87%BD%E6%95%B0%E5%89%8D%E5%90%91%E5%A3%B0%E6%98%8E)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -34,11 +36,13 @@
 最终实现的C语言子集的文法：
 ```EBNF
 program = {global_decl};
-global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl;
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_type_decl | forward_func_decl;
 enum_decl = enum, [id], "{", id, ["=", number], {",", id, ["=", number]} ,"}";
-func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
+func_decl = ret_type, id, "(", [param_decl], ")", "{", func_body, "}";
 struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
 union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
+forward_type_decl = (union | struct), id;
+forward_func_decl = ret_type, id, "(", [param_decl], ")", ";";
 param_decl = type, {"*"}, id, {",", type {"*"}, id};
 ret_type = void | type, {"*"};
 type = int | char | user_defined_type;
@@ -561,4 +565,49 @@ enum Var_type { CHAR = 0, INT, ENUM, UNION = 100, STRUCT = 500, PTR = 1000 };
 - 对所有层数的指针支持指针支持的通用操作 `+ - ++ -- [] * &`，但一层的时候需要考虑单元大小。
 - 其他所有情况都不合法，进行类型检查和报错。主要是`= ?: || && | ^ & == != < > <= >= << >> * / % ()`提供报错信息，运算前统一检查，不在每个运算符中单独检查。
 - 不对结构和联合支持赋值运算符，使用`memcpy`内存拷贝来做复制。
+
+## 使用struct重构
+
+有三个地方：
+- 符号表。
+- break和continue跳转列表。
+- goto跳转列表。
+
+定义对应结构体直接替换即可，很简单，不赘述。用结构实现之后可以减少一些原来因为类型不匹配必须加的类型转换。但如果一个域可以保存多种类型的值的，还是需要在必要时候做转换。提交记录：[865d47a](https://github.com/tch0/JustAToyCCompiler/commit/865d47a8fe92e0276ee677d7d0ea499ec316504e)。
+
+## 函数前向声明
+
+C语言不支持函数重载，所以只根据函数名即可唯一确定一个函数。那么参数列表的检验就成了累赘了。
+- 所以和函数调用一样，这里**不会检查函数参数列表是否和定义一致**。甚至于都没有保存任何函数参数列表的信息，只在解析定义时即时生成代码。
+- 这里假定程序员不会犯函数声明和定义时参数列表不一致的错误，并且不进行提示，不一致的话，只是是语法正确的函数声明即可，函数调用肯定是按照定义来的。
+- 多次前向声明完全不会有问题。
+
+实现：
+- 类似于break、continue、goto的做法。
+```C++
+struct Func_call_item
+{
+    int hash;               // 函数名哈希
+    int line;               // 函数调用的行号
+    int *call_addresss;     // 需要填充的code段指令中函数跳转地址的地址
+};
+struct Func_call_item *func_list;   // 待填充的函数调用列表
+```
+- 函数调用处理：
+    - 如果函数已经定义，则没有改变，直接填充地址。
+    - 如果没有定义，记录保存函数跳转地址的code段地址，整个文件解析完后，统一处理函数跳转地址。某个函数没有定义的话，就会报错，为了确定具体错误位置，列表项中可以保存一个行号。
+    - 如果没有声明，报错。
+- 函数定义处理：
+    - 函数名不能和其他全局定义冲突。
+        - 不允许同一个作用域的函数名、变量名冲突的情况。全局作用域内、局部作用域内。这个逻辑已经有了。
+        - 函数参数和局部变量定义依然可以覆盖全局的函数、系统调用、枚举值、全局变量、自定义类型，也已经有了。
+    - 允许函数声明。
+    - 允许对已声明或定义的函数进行再次声明。
+    - 允许对已声明或者未声明的函数进行定义。
+    - 已定义的函数重新声明时，或者已声明的函数定义或再次声明时会**检查返回值是否相同**，但并不检查参数列表，参数只要符合语法就行。
+- 递归的问题：
+    - 支持递归就要求解析到当前函数中时，就已经有了当前函数的声明或者定义，如果函数声明或定义解析完成后才去填充符号记录的话就做不到。
+    - 所以要先缓存当前符号表项，解析到函数时先假定合法，给当前函数一个定义，解析递归调用时就能找到了。结束解析后再检查当前函数是否重复定义，返回值是否与声明匹配。
+    - 直接假定合法给了定义会假定`code+1`就是入口，如果当前是声明那么需要还原为缓存项。
+
 

@@ -14,7 +14,7 @@
 // 符号表项：支持struct后用struct替换数组实现。
 struct Symbol_item
 {
-    int token;      // 标记，值应该是Token_type类型的。
+    int token;      // 标记，值应该是Token_type类型的，除了关键字之外，一定是Id。
     int hash;       // 根据名称计算出的一个哈希值，加速查找，不需要每次都去遍历名字比较。
     char *name;     // 名称，计算出哈希值之后就不需要用它了，指向源文件某位置的char*指针。
     int class;      // 标识符的类型，Id类型的token才需要，值为Identifier_type中枚举。
@@ -34,9 +34,17 @@ struct Bc_list_item
 struct Label_list_item
 {
     int label_hash;         // 标号的哈希
+    int line;               // goto语句的行号
     int *goto_address;      // 需要填充的code段指令中标号地址的地址
 };
 
+// 尚未定义的函数调用列表
+struct Func_call_item
+{
+    int hash;               // 函数名哈希
+    int line;               // 函数调用的行号
+    int *call_addresss;     // 需要填充的code段指令中函数跳转地址的地址
+};
 
 // VM
 char *data;         // 数据段
@@ -66,6 +74,7 @@ struct Bc_list_item *break_list;    // break语句跳转地址的列表
 struct Bc_list_item *continue_list; // continue语句跳转地址列表
 int *cur_loop;                      // 保存当前正在解析的循环的地址，用来唯一标识一个循环，for break & continue
 struct Label_list_item *label_list; // goto语句跳转地址列表
+struct Func_call_item *func_list;   // 待填充的函数调用列表
 
 // debug
 int debug;                  // 调试模式
@@ -570,6 +579,7 @@ void expression(int level)
     int tmp;
     int *addr;
     struct us_domain* cur_node;
+    struct Func_call_item *func_list_pos;
 
     // 整数字面值
     if (token == Num)
@@ -674,11 +684,24 @@ void expression(int level)
             else if (id->class == Fun)
             {
                 *++code = JSR;
-                *++code = id->value;
+                // 函数已经定义
+                if (id->value)
+                {
+                    *++code = id->value;
+                }
+                // 函数声明了但是未定义，记录调用地址，全局定义解析结束后填充
+                else
+                {
+                    for (func_list_pos = func_list; func_list_pos->hash; func_list_pos++);
+                    func_list_pos->hash = id->hash;
+                    func_list_pos->line = line;
+                    func_list_pos->call_addresss = ++code;
+                }
             }
+            // 未定义的符号
             else
             {
-                printf("%d: invalid function call\n", line);
+                printf("%d: call undeclared function\n", line);
                 exit(-1);
             }
 
@@ -1622,6 +1645,7 @@ void statement()
         // 添加当前需要填充的地址到label列表末尾
         for (label_list_pos = label_list; label_list_pos->label_hash; label_list_pos++) ;
         label_list_pos->label_hash = current_id->hash;
+        label_list_pos->line = line;
         label_list_pos->goto_address = ++code;
 
         match(';');
@@ -1898,20 +1922,33 @@ void function_body()
 /*
 解析函数体，从参数列表开始
 func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
+forward_func_decl = ret_type, id, "(", [param_decl], ")", ";";
+
+前向声明返回1，函数定义返回0
 */
-void function_declaration()
+int function_declaration()
 {
+    int forward_decl;
     struct Label_list_item *label_list_pos;
     int find_label;
 
     cur_loop = 0;
+    forward_decl = 0;
 
     match('(');
     function_parameter();
     match(')');
-    match('{');
-    function_body();
-    //match('}'); // 不消耗}，留到global_declaration中用于标识函数解析过程的结束
+
+    if (token == ';')
+    {
+        forward_decl = 1; // 不消耗;，留到外面
+    }
+    else
+    {
+        match('{');
+        function_body();
+        //match('}'); // 不消耗}，留到global_declaration中用于标识函数解析过程的结束
+    }
 
     // 填充goto的标号地址
     for (label_list_pos = label_list; label_list_pos->label_hash; label_list_pos++)
@@ -1928,7 +1965,7 @@ void function_declaration()
         }
         if (!find_label)
         {
-            printf("%d: invalid label for goto in function, hash: %d\n", line, label_list_pos->label_hash);
+            printf("%d: undefined label for goto in function, hash: %d\n", label_list_pos->line, label_list_pos->label_hash);
             exit(-1);
         }
         // 填充完后依次清空goto列表
@@ -1948,6 +1985,7 @@ void function_declaration()
         }
         current_id++;
     }
+    return forward_decl;
 }
 
 /*
@@ -2156,20 +2194,22 @@ void struct_union_body(int su_type, int struct_or_union)
 
 /*
 处理全局的变量定义、类型定义、以及函数定义：
-global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_decl;
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_type_decl | forward_func_decl;
 enum_decl = enum, [id], "{", enum_body ,"}";
-func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
+func_decl = ret_type, id, "(", [param_decl], ")", "{", func_body, "}";
 var_decl = type {"*"}, id, {",", {"*"}, id}, ";";
 ret_type = void | type, {"*"};
 type = int | char | user_defined_type;
 user_defined_type = (enum | union | struct), id;
 struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
 union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
-forward_decl = (union | struct), id; (* 目前仅struct和union支持前向声明 *)
+forward_type_decl = (union | struct), id;
+forward_func_decl = ret_type, id, "(", [param_decl], ")", ";"; 
 */
 void global_declaration()
 {
-    int type;       // 变量的数据类型
+    int type;
+    struct Symbol_item cur_func; // 函数解析时缓存当前符号表项
     struct Symbol_item *id;
 
     basetype = INT;
@@ -2365,7 +2405,7 @@ void global_declaration()
             // 已知标识符，但不是struct类型
             else
             {
-                printf("%d: known identifier can not be new struct name in definition\n", line);
+                printf("%d: known identifier can not be new union name in definition\n", line);
                 exit(-1);
             }
         }
@@ -2390,7 +2430,7 @@ void global_declaration()
     }
 
 define_glo_func:
-    // 变量或者函数定义，直到变量结束;，函数结束}
+    // 变量定义、函数定义、函数声明，直到变量定义函数声明结束;，函数定义结束}
     while (token != ';' && token != '}')
     {
         type = basetype;
@@ -2406,16 +2446,10 @@ define_glo_func:
             printf("%d: invalid global declaration\n", line);
             exit(-1);
         }
-        // 这个标识符已经有了类型，重复的定义
-        if (current_id->class)
-        {
-            printf("%d: duplicate golbal declaration\n", line);
-            exit(-1);
-        }
+        id = current_id;
         match(Id);
-        current_id->type = type;
 
-        // 函数定义
+        // 函数定义或者声明
         if (token == '(')
         {
             // 不支持union或者struct作为函数返回值
@@ -2424,26 +2458,96 @@ define_glo_func:
                 printf("%d: do not support struct/union to be type of function return value, please use pointer instead\n", line);
                 exit(-1);
             }
-            current_id->class = Fun;
-            current_id->value = (int)(code + 1); // 函数的内存地址
-            function_declaration();
+
+            // 缓存当前符号表项
+            memcpy(&cur_func, id, sizeof(struct Symbol_item));
+
+            // 先给一个定义，保证递归调用时函数已经有了定义，结束解析后再检查当前函数是否重复定义，返回值是否与声明匹配等
+            id->class = Fun;
+            id->type = type;
+            id->value = (int)(code + 1); // 函数入口
+
+            // 前向声明，不生成代码
+            if (function_declaration())
+            {
+                // 符号已经定义
+                if (cur_func.class)
+                {
+                    // 符号已经声明为其他类型
+                    if (cur_func.class != Fun)
+                    {
+                        printf("%d: duplicate global declaration, identifier has been used\n", line);
+                        exit(-1);
+                    }
+                    // 已经声明或者定义为函数，但返回值不同
+                    else if (cur_func.type != type)
+                    {
+                        printf("%d: invalid function declaration, different return type\n", line);
+                        exit(-1);
+                    }
+                    // 已经声明或定义为函数，还原为缓存项
+                    else
+                    {
+                        id->value = cur_func.value;
+                    }
+                }
+                // 新的函数名，初次声明，值为空
+                else
+                {
+                    id->value = 0;
+                }
+            }
+            // 函数定义
+            else
+            {
+                // 符号已经定义
+                if (cur_func.class)
+                {
+                    // 符号已经声明为其他类型
+                    if (cur_func.class != Fun)
+                    {
+                        printf("%d: duplicate global declaration, identifier has been used\n", line);
+                        exit(-1);
+                    }
+                    // 同名函数已经定义
+                    else if (cur_func.value)
+                    {
+                        printf("%d: redefinition of function\n", line);
+                        exit(-1);
+                    }
+                    // 未定义，返回值和声明不同
+                    else if (cur_func.type != type)
+                    {
+                        printf("%d: invalid function definition, different return type with declaration\n", line);
+                        exit(-1);
+                    }
+                    // else 和声明匹配并且第一次定义，已经定义
+                }
+                // else 新的函数名，已经定义
+            }
         }
         // 全局变量定义，在data区分配内存
         else
         {
-            current_id->class = Glo;
-            current_id->value = (int)data;
+            if (id->class)
+            {
+                printf("%d: duplicate global declaration, identifier has been used\n", line);
+                exit(-1);
+            }
+            id->class = Glo;
+            id->type = type;
+            id->value = (int)data;
 
             // 结构与联合
-            if (current_id->type < PTR && current_id->type >= UNION)
+            if (id->type < PTR && id->type >= UNION)
             {
-                if (current_id->type >= STRUCT) // struct
+                if (id->type >= STRUCT) // struct
                 {
-                    data = data + struct_symbols_list[current_id->type - STRUCT].size;
+                    data = data + struct_symbols_list[id->type - STRUCT].size;
                 }
                 else // union
                 {
-                    data = data + union_symbols_list[current_id->type - UNION].size;
+                    data = data + union_symbols_list[id->type - UNION].size;
                 }
             }
             // 指针或者整型
@@ -2473,12 +2577,13 @@ parser入口
 支持的C语言子集（EBNF文法）:
 
 program = {global_decl};
-global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_decl;
+global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_type_decl | forward_func_decl;
 enum_decl = enum, [id], "{", id, ["=", number], {",", id, ["=", number]} ,"}";
-func_decl = ret_type, id, "(", param_decl, ")", "{", func_body, "}";
+func_decl = ret_type, id, "(", [param_decl], ")", "{", func_body, "}";
 struct_decl = struct, [id], "{", var_decl, {var_decl}, "}", ";";
 union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
-forward_decl = (union | struct), id;
+forward_type_decl = (union | struct), id;
+forward_func_decl = ret_type, id, "(", [param_decl], ")", ";";
 param_decl = type, {"*"}, id, {",", type {"*"}, id};
 ret_type = void | type, {"*"};
 type = int | char | user_defined_type;
@@ -2505,6 +2610,9 @@ continue_statement = continue, ";";
 */
 void parse()
 {
+    struct Func_call_item *func_list_pos;
+    int find_func;
+
     cur_struct_type = STRUCT;
     cur_union_type = UNION;
 
@@ -2512,6 +2620,29 @@ void parse()
     while (token > 0)
     {
         global_declaration();
+    }
+
+    // 全局定义解析完成后填充未定义的函数调用
+    for (func_list_pos = func_list; func_list_pos->hash; func_list_pos++)
+    {
+        find_func = 0;
+        for (current_id = symbols; current_id->token; current_id++)
+        {
+            if (current_id->class == Fun && current_id->hash == func_list_pos->hash && current_id->value)
+            {
+                *func_list_pos->call_addresss = current_id->value;
+                find_func = 1;
+                break;
+            }
+        }
+        if (!find_func)
+        {
+            printf("%d: call declared but undefined function\n", func_list_pos->line);
+            exit(-1);
+        }
+        func_list_pos->hash = 0;
+        func_list_pos->line = 0;
+        func_list_pos->call_addresss = 0;
     }
 }
 
@@ -2652,7 +2783,12 @@ int main(int argc, char** argv)
     }
     if (!(label_list = (struct Label_list_item*)malloc(sizeof(struct Label_list_item) * 1024))) // 1024 unit
     {
-        printf("Could not malloc(%d) for label list for goto of parser\n", 8 * 1024);
+        printf("Could not malloc(%d) for label list for goto of parser\n", sizeof(struct Label_list_item) * 1024);
+        exit(-1);
+    }
+    if (!(func_list = (struct Func_call_item*)malloc(sizeof(struct Func_call_item) * 1024))) // 1024 unit
+    {
+        printf("Could not malloc(%d) for function call list of parser\n", sizeof(struct Func_call_item) * 1024);
         exit(-1);
     }
     if (!(struct_symbols_list = (struct us_domain*)malloc(sizeof(struct us_domain) * 1024))) // 1024 unit
@@ -2674,6 +2810,7 @@ int main(int argc, char** argv)
     memset(break_list, 0, sizeof(struct Bc_list_item) * 1024);
     memset(continue_list, 0, sizeof(struct Bc_list_item) * 1024);
     memset(label_list, 0, sizeof(struct Label_list_item) * 1024);
+    memset(func_list, 0, sizeof(struct Func_call_item) * 1024);
     memset(struct_symbols_list, 0, sizeof(struct us_domain) * 1024);
     memset(union_symbols_list, 0, sizeof(struct us_domain) * 1024);
     memset(us_domains_list, 0, sizeof(struct us_domain) * 4096);

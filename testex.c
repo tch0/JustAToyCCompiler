@@ -3,6 +3,48 @@
 int total_count, local_count, failed_count;
 char *test_class;
 
+// function forward declaration
+void test(int actual, int expected);
+void test_for();
+void test_do_while();
+void test_break();
+void test_continue();
+void test_goto();
+void test_enumeration();
+void test_struct_union();
+void composite_test_binary_tree();
+
+// repeat declaration
+void test(int actual, int expected);
+void test_for();
+void test_do_while();
+void test_break();
+void test_continue();
+void test_goto();
+void test_enumeration();
+void test_struct_union();
+void composite_test_binary_tree();
+
+int main()
+{
+    total_count = 0;
+    failed_count = 0;
+
+    test_for();
+    test_do_while();
+    test_break();
+    test_continue();
+    test_goto();
+    test_enumeration();
+    test_struct_union();
+
+    printf("total: %d, passed: %d, failed: %d\n", total_count, total_count - failed_count, failed_count);
+    
+    composite_test_binary_tree();
+    return 0;
+}
+
+
 void test(int actual, int expected)
 {
     if (actual != expected)
@@ -456,22 +498,3 @@ void composite_test_binary_tree()
     printf("\n");
 }
 
-int main()
-{
-    total_count = 0;
-    failed_count = 0;
-
-    test_for();
-    test_do_while();
-    test_break();
-    test_continue();
-    test_goto();
-    test_enumeration();
-    test_struct_union();
-
-    printf("total: %d, passed: %d, failed: %d\n", total_count, total_count - failed_count, failed_count);
-
-    composite_test_binary_tree();
-
-    return 0;
-}
