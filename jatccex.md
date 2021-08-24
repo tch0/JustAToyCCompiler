@@ -373,7 +373,7 @@ user_defined_type = (enum | union | struct), id;
 
 ## union & struct
 
-要实现得先明白[union](https://zh.cppreference.com/w/c/language/union)和[struct](https://zh.cppreference.com/w/c/language/struct)语法是什么样的。最新版本加的新特性不用关新，只需要关心最基本功能。
+要实现得先明白[union](https://zh.cppreference.com/w/c/language/union)和[struct](https://zh.cppreference.com/w/c/language/struct)语法是什么样的。最新版本加的新特性不用关心，只需要关心最基本功能。
 
 ### 语法
 
@@ -455,7 +455,7 @@ union_decl = union, [id], "{", var_decl, {var_decl}, "}", ";";
 
 ### 类型解析实现
 
-考虑最简单的实现方式，用一个链表节点来表示一个结构体或者联合体类型或者一个它们的域，一个域的信息有：变量名称哈希、变量类型、大小、在整个结构中的偏移（union中所有域都是0）。
+考虑最简单的实现方式，用一个链表节点来表示一个结构体或者联合体类型或者一个它们的域，一个域的信息有：变量名称哈希、变量类型、大小、在整个结构中的偏移（union中所有域偏移都是0）。
 ```C++
 // union or struct domain
 struct us_domain
@@ -502,7 +502,7 @@ first element:
 [type of head]      [type of int]      [type of node]
 [size of head]      [size of int]      [size of node]
 [0]                 [0]                [0]           
-[next]          ->  [next]          -> [next]        
+[next]          ->  [next]          -> [next]        -> 0
 ```
 结构和联合的类型由`Var_type`表示，`union`从100开始，`struct`从500开始，如果是复合了一层指针就加一个指针`PTR`，每新定义一个类型就+1，各自减去`UNION/STRUCT`就是他们在`struct_symbols_list/union_symbols_list`中的下标。这个类型就保存在符号表的`Class`域中。前向声明时就可以填充了，然后在结构体成员信息表中添加这一项，但`next`域为空。
 ```C++
@@ -514,7 +514,7 @@ enum Var_type { CHAR = 0, INT, ENUM, UNION = 100, STRUCT = 500, PTR = 1000 };
 - 类型定义和前向声明，上一步已经做了。
 - 全局变量声明、局部变量声明。
     - 全局变量，分配在data区，依赖于struct或者union的大小。从其符号信息表中获取。
-    - 局部变量分配在栈上，栈从高地址向低地址生长，所以结构和联合体变量的地址应该是最后一个单元紧邻下一个变量内存的首地址。所占单元数量是`sizeof(struct xxx) / sizeof(int)`，附加到`ENT`操作数上。
+    - 局部变量分配在栈上，栈从高地址向低地址生长，所以结构和联合体变量的地址应该是按照大小分配后紧邻下一个变量内存的首地址。所占单元数量是`sizeof(struct xxx) / sizeof(int)`，附加到`ENT`操作数上。
     ```
     int a;
     struct node s;
@@ -531,7 +531,7 @@ enum Var_type { CHAR = 0, INT, ENUM, UNION = 100, STRUCT = 500, PTR = 1000 };
     ```
 - 作为函数返回值类型支持、函数参数声明。
     - 因为函数返回值存储在ax中，是一个右值。如果用栈做保存会需要做很多多余的事情，选择不支持。
-    - 参数声明可以做，但是函数调用时需要做结构的复制，考虑还是不做了，用指针就行。实现赋值后可以考虑看要不要支持。
+    - 参数声明可以做，但是函数调用时需要做结构的复制，考虑还是不做了，用指针就行。
     - 总是可以使用指针，指针和其他类型指针并无区别。
 
 ### 运算符支持
