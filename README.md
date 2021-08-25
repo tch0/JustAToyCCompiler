@@ -91,4 +91,15 @@ gcc jatccex.c -o jatccex
 - x86 JIT compiling ?
 - debugger ?
 
+## PR要求
+
+- `jatcc.c`作为基础版本不再改动。
+- 接受对`jatccex.c`的有意义改进，针对改进在`testex.c`中补充测试用例。如果是仅改进了语法检查，仅针对语法错误的情况那可以没有测试用例。
+- 确保以下测试能够顺利通过
+    ```shell
+    ./jatccex testex.c
+    ./jatccex jatccex.c test.c
+    ./jatccex jatccex.c testex.c
+    ```
+
 欢迎任何有意义的改进、扩展、建议与BUG反馈。
