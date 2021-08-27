@@ -19,7 +19,7 @@ struct Symbol_item
     char *name;     // 名称，计算出哈希值之后就不需要用它了，指向源文件某位置的char*指针。
     int class;      // 标识符的类型，Id类型的token才需要，值为Identifier_type中枚举。
     int type;       // 标识符的变量类型或者函数返回值类型，值为Var_type枚举中普通类型与PTR组合得到的值。
-    int value;      // 标识符的值。如果标识符是函数，则是函数地址，如果是变量或者字符串常量就是地址，如果是整数字面量则是具体的值。
+    int value;      // 标识符的值。如果标识符是函数，则是函数地址，如果是变量就是相对/绝对地址，如果是枚举常量则是具体的值，标号的话就是地址，自定义类型不使用。
     int gclass, gtype, gvalue;  // 同class,type,value用于全局作用域覆盖局部作用域时存放全局符号。
 };
 
@@ -565,7 +565,7 @@ int get_unit_size(int type)
 /*
 解析表达式：
 
-对于每个运算符，递归地向后处理高于当前运算符优先级的运算符后再回来处理当前的运算。
+对于每个运算符，递归地向后处理高于当前运算符优先级(左结合的话是高于，右结合的话是高于和等于)的运算符后再回来处理当前的运算。
 一元运算符优先级总是高于二元运算符，所以总是先处理一元运算符。
 
 代码生成的逻辑：
@@ -603,7 +603,7 @@ void expression(int level)
         data = (char*)(((int)data + sizeof(int)) & (-(int)sizeof(int))); // data首地址取int整数倍，同时字符串末尾填充为空位置中的0
         expr_type = CHAR + PTR;
     }
-    // sizeof运算符：一元运算符，结果是int
+    // sizeof运算符：一元运算符，结果是int类型的右值
     else if (token == Sizeof)
     {
         match(Sizeof);
@@ -632,10 +632,20 @@ void expression(int level)
         {
             if (expr_type >= STRUCT) // struct
             {
+                if (struct_symbols_list[expr_type - STRUCT].next == 0)
+                {
+                    printf("%d: can not get size of undefined struct type\n", line);
+                    exit(-1);
+                }
                 *++code = struct_symbols_list[expr_type - STRUCT].size;
             }
             else // union
             {
+                if (union_symbols_list[expr_type - UNION].next == 0)
+                {
+                    printf("%d: can not get size of undefined union type\n", line);
+                    exit(-1);
+                }
                 *++code = union_symbols_list[expr_type - UNION].size;
             }
         }
@@ -652,7 +662,7 @@ void expression(int level)
         // 记录函数或者变量的id
         id = current_id;
 
-        // 函数调用
+        // 函数调用，右值
         if (token == '(')
         {
             match('(');
@@ -689,7 +699,7 @@ void expression(int level)
                 {
                     *++code = id->value;
                 }
-                // 函数声明了但是未定义，记录调用地址，全局定义解析结束后填充
+                // 函数声明了但是未定义，记录调用地址，全局声明解析结束后填充
                 else
                 {
                     for (func_list_pos = func_list; func_list_pos->hash; func_list_pos++);
@@ -713,14 +723,17 @@ void expression(int level)
             }
             expr_type = id->type; // 返回值类型
         }
-        // 枚举值
+        // 枚举常量，右值
         else if (id->class == EnumVal)
         {
             *++code = IMM;
             *++code = id->value;
             expr_type = INT;
         }
-        // 全局或局部变量
+        // 全局或局部变量，作为左值，需要先加载地址到ax再通过LC/LI加载值，以上一条指令是否是LC/LI作为判断是否是左值的依据，
+        // 需要当左值来使用时，去掉LC/LI后就能够在ax中得到左值的地址，以此来完成取地址、赋值等操作。当做右值使用时和常量、中间结果等右值无异。
+        // 左值经过某些运算后还是左值比如=*[].->，经过某些运算后变成了右值+-*/%^&|>><< etc，皆通过这个机制来实现。
+        // 可以说是表达式代码生成的最精髓之处！
         else
         {
             // 函数内定义的局部变量或者函数参数，加载与bp的相对地址
@@ -773,7 +786,7 @@ void expression(int level)
 
             match(')');
 
-            expression(Inc); // 强制类型转换优先级同++
+            expression(Inc); // 强制类型转换优先级同前缀++
             expr_type = tmp;
         }
         // 普通的括号运算符，而不是强制类型转换
@@ -783,7 +796,7 @@ void expression(int level)
             match(')');
         }
     }
-    // 指针解引用
+    // 指针解引用，得到左值
     else if (token == Mul)
     {
         match(Mul);
@@ -800,7 +813,7 @@ void expression(int level)
         }
         *++code = (expr_type == CHAR) ? LC : LI; // 如果是多重指针就是LI，加载地址到ax
     }
-    // 取地址操作
+    // 取地址操作，运用于左值，得到右值
     else if (token == And)
     {
         match(And);
@@ -819,7 +832,7 @@ void expression(int level)
 
         expr_type = expr_type + PTR;
     }
-    // 逻辑非
+    // 逻辑非，得到右值
     else if (token == '!')
     {
         match('!');
@@ -832,7 +845,7 @@ void expression(int level)
 
         expr_type = INT;
     }
-    // 按位取反
+    // 按位取反，得到右值
     else if (token == '~')
     {
         match('~');
@@ -845,14 +858,14 @@ void expression(int level)
 
         expr_type = INT;
     }
-    // 正号，什么都不做
+    // 正号，得到右值
     else if (token == Add)
     {
         match(Add);
         expression(Inc);
         expr_type = INT;
     }
-    // 负号
+    // 负号，一元前缀右结合，得到右值
     else if (token == Sub)
     {
         match(Sub);
@@ -875,7 +888,8 @@ void expression(int level)
 
         expr_type = INT;
     }
-    // 前缀++/--，右结合，后缀++/--优先级高于前缀并且是左结合
+    // 前缀++/--，右结合，得到左值
+    // Inc枚举值表示前缀++/--的优先级，后缀++/--左结合优先级高于前缀
     else if (token == Inc || token == Dec)
     {
         tmp = token;
@@ -1164,7 +1178,7 @@ void expression(int level)
             *++code = MOD;
             expr_type = tmp;
         }
-        // 后缀 ++ --
+        // 后缀 ++ -- 最高优先级且左结合一定最先计算
         // 将变量值++或者--后将原值取到ax中
         else if (token == Inc || token == Dec)
         {
@@ -1180,7 +1194,7 @@ void expression(int level)
             }
             else
             {
-                printf("%d: invlaid value int post ++/--\n", line);
+                printf("%d: invlaid lvalue int post ++/--\n", line);
                 exit(-1);
             }
             
@@ -1218,13 +1232,13 @@ void expression(int level)
             *++code = ADD;
             *++code = (expr_type == CHAR) ? LC : LI;
         }
-        // . -> 最高优先级，左结合，一定最先计算，不需要再向后查找更高优先级的表达式了
+        // . -> 最高优先级，左结合，.需要左值，->不要求，得到左值，一定最先计算，不需要再向后查找更高优先级的表达式
         else if (token == Dot || token == Gmbp)
         {
             // ->
             if (token == Gmbp)
             {
-                // 一层struct/union指针，此时ax中就是->左边的左值的地址，地址是否有效由写程序的人负责，这里也无法检测
+                // 一层struct/union指针，此时ax中就是->左边的表达式地址，地址是否有效由写程序的人负责，这里也无法检测
                 if (expr_type >= PTR + UNION && expr_type < PTR + PTR)
                 {
                     expr_type = expr_type - PTR;
@@ -1973,7 +1987,7 @@ int function_declaration()
         label_list_pos->goto_address = 0;
     }
 
-    // 遍历符号表，恢复全局变量定义，如果没有同名全局变量，则删除后符号表中还有该项，但是Class/Type/Value都会被置空
+    // 遍历符号表，恢复全局变量定义，如果没有同名全局变量，则删除后符号表中还有该项，但是class/type/value都会被置空，不会影响
     current_id = symbols;
     while (current_id->token)
     {
@@ -2084,7 +2098,7 @@ void struct_union_body(int su_type, int struct_or_union)
         // 整型
         if (domain_type >= CHAR && domain_type <= ENUM)
         {
-            domain_size = sizeof(int);
+            domain_size = sizeof(int); // char也按int大小对齐，存在优化空间，这里只是为了方便
         }
         // 指针
         else if (domain_type >= PTR)
@@ -2193,7 +2207,7 @@ void struct_union_body(int su_type, int struct_or_union)
 
 
 /*
-处理全局的变量定义、类型定义、以及函数定义：
+处理全局的变量定义、类型定义、以及函数定义、类型和函数的前向声明：
 global_decl = enum_decl | func_decl | var_decl | struct_decl | union_decl | forward_type_decl | forward_func_decl;
 enum_decl = enum, [id], "{", enum_body ,"}";
 func_decl = ret_type, id, "(", [param_decl], ")", "{", func_body, "}";
@@ -2271,7 +2285,7 @@ void global_declaration()
                 id->type = cur_struct_type;
                 cur_struct_type++;
                 
-                // 填充结构体信息
+                // 填充结构体类型信息
                 struct_symbols_list[id->type - STRUCT].hash = id->hash;
                 struct_symbols_list[id->type - STRUCT].type = id->type;
                 struct_symbols_list[id->type - STRUCT].size = 0;    // 解析后确定
@@ -2330,7 +2344,7 @@ void global_declaration()
         }
         else
         {
-            printf("%d: invalid use of struct, must with an identifier\n", line);
+            printf("%d: invalid use of keyword struct, must be with an identifier\n", line);
             exit(-1);
         }
         match(';');
@@ -2352,14 +2366,14 @@ void global_declaration()
                 id->type = cur_union_type;
                 cur_union_type++;
 
-                // 填充结构体信息
+                // 填充联合体类型信息
                 union_symbols_list[id->type - UNION].hash = id->hash;
                 union_symbols_list[id->type - UNION].type = id->type;
                 union_symbols_list[id->type - UNION].size = 0;    // 解析后确定
                 union_symbols_list[id->type - UNION].offset = 0;
                 union_symbols_list[id->type - UNION].next = 0;    // 解析后确定
 
-                // 新的struct定义
+                // 新的union定义
                 if (token == '{')
                 {
                     match('{');
@@ -2550,7 +2564,7 @@ define_glo_func:
                     data = data + union_symbols_list[id->type - UNION].size;
                 }
             }
-            // 指针或者整型
+            // 指针、整型,char不足int大小的也按照int大小对齐，保证地址一定是sizeof(int)整数倍
             else
             {
                 data = data + sizeof(int);
